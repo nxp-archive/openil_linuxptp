@@ -210,12 +210,25 @@ static int raw_open(struct transport *t, const char *name,
 	int efd, gfd;
 	char *str;
 
-	str = config_get_string(t->cfg, name, "ptp_dst_mac");
+#ifdef SJA1105_TC
+	if (t->is_sja1105)
+		str = "01:1B:19:00:00:00";
+	else
+#endif
+		str = config_get_string(t->cfg, name, "ptp_dst_mac");
+
 	if (str2mac(str, ptp_dst_mac)) {
 		pr_err("invalid ptp_dst_mac %s", str);
 		return -1;
 	}
-	str = config_get_string(t->cfg, name, "p2p_dst_mac");
+
+#ifdef SJA1105_TC
+	if (t->is_sja1105)
+		str = "01:80:C2:00:00:0E";
+	else
+#endif
+		str = config_get_string(t->cfg, name, "p2p_dst_mac");
+
 	if (str2mac(str, p2p_dst_mac)) {
 		pr_err("invalid p2p_dst_mac %s", str);
 		return -1;
