@@ -46,6 +46,10 @@
 #include "uds.h"
 #include "util.h"
 
+#ifdef SJA1105_SYNC
+#include "sja1105.h"
+#endif
+
 #define N_CLOCK_PFD (N_POLLFD + 1) /* one extra per port, for the fault timer */
 #define POW2_41 ((double)(1ULL << 41))
 
@@ -1220,15 +1224,24 @@ struct ClockIdentity clock_identity(struct clock *c)
 
 static int clock_resize_pollfd(struct clock *c, int new_nports)
 {
+#ifdef SJA1105_SYNC
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+#endif
 	struct pollfd *new_pollfd;
+	int pollfd_num;
 
+#ifdef SJA1105_SYNC
+	if (t->valid)
+		pollfd_num = 1 + 1 + (new_nports + 1) * N_CLOCK_PFD;
+	else
+#endif
+		pollfd_num = 1 + (new_nports + 1) * N_CLOCK_PFD;
 	/*
 	 * Need to allocate one descriptor for RT netlink and one
 	 * whole extra block of fds for UDS.
 	 */
 	new_pollfd = realloc(c->pollfd,
-			     (1 + (new_nports + 1) * N_CLOCK_PFD) *
-			     sizeof(struct pollfd));
+			     pollfd_num * sizeof(struct pollfd));
 	if (!new_pollfd)
 		return -1;
 	c->pollfd = new_pollfd;
@@ -1253,6 +1266,9 @@ static void clock_check_pollfd(struct clock *c)
 {
 	struct port *p;
 	struct pollfd *dest = c->pollfd + 1;
+#ifdef SJA1105_SYNC
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+#endif
 
 	if (c->pollfd_valid)
 		return;
@@ -1261,6 +1277,15 @@ static void clock_check_pollfd(struct clock *c)
 		dest += N_CLOCK_PFD;
 	}
 	clock_fill_pollfd(dest, c->uds_port);
+
+#ifdef SJA1105_SYNC
+	if (t->valid) {
+		dest += N_CLOCK_PFD;
+		sja1105_sync_fill_pollfd(dest);
+		sja1105_sync_timer_settime();
+	}
+#endif
+
 	c->pollfd_valid = 1;
 }
 
@@ -1462,13 +1487,29 @@ struct PortIdentity clock_parent_identity(struct clock *c)
 
 int clock_poll(struct clock *c)
 {
-	int cnt, err, i, sde = 0;
+#ifdef SJA1105_SYNC
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+	struct ClockIdentity clockid;
+#endif
+	int cnt, err, i, pollfd_num, sde = 0;
 	enum fsm_event event;
 	struct pollfd *cur;
 	struct port *p;
 
+#ifdef SJA1105_SYNC
+	memset(&clockid, 0, sizeof(clockid));
+#endif
+
 	clock_check_pollfd(c);
-	cnt = poll(c->pollfd, 1 + (c->nports + 1) * N_CLOCK_PFD, -1);
+
+#ifdef SJA1105_SYNC
+	if (t->valid)
+		pollfd_num = 1 + 1 + (c->nports + 1) * N_CLOCK_PFD;
+	else
+#endif
+		pollfd_num = 1 + (c->nports + 1) * N_CLOCK_PFD;
+
+	cnt = poll(c->pollfd, pollfd_num, -1);
 	if (cnt < 0) {
 		if (EINTR == errno) {
 			return 0;
@@ -1480,8 +1521,22 @@ int clock_poll(struct clock *c)
 		return 0;
 	}
 
-	/* Check the RT netlink. */
 	cur = c->pollfd;
+
+#ifdef SJA1105_SYNC
+	if (t->valid) {
+		if (cur[pollfd_num - 1].revents & (POLLIN|POLLPRI)) {
+			pr_debug("sja1105: sync timer timeout");
+
+			if (!cid_eq(&c->best_id, &clockid))
+				sja1105_sync(c->clkid);
+
+			sja1105_sync_timer_settime();
+		}
+	}
+#endif
+
+	/* Check the RT netlink. */
 	if (cur->revents & (POLLIN|POLLPRI)) {
 		rtnl_link_status(cur->fd, clock_link_status, c);
 	}

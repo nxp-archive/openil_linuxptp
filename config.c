@@ -222,6 +222,11 @@ struct config_item config_tab[] = {
 	PORT_ITEM_STR("p2p_dst_mac", "01:80:C2:00:00:0E"),
 	GLOB_ITEM_STR("revisionData", ";;"),
 	GLOB_ITEM_INT("sanity_freq_limit", 200000000, 0, INT_MAX),
+#ifdef SJA1105_SYNC
+	GLOB_ITEM_INT("sja1105_max_offset", 0, 10, INT_MAX),
+	GLOB_ITEM_DBL("sja1105_sync_kp", 0.096, 0.0, 1.0),
+	GLOB_ITEM_DBL("sja1105_sync_ki", 0.007, 0.0, 1.0),
+#endif
 	GLOB_ITEM_INT("slaveOnly", 0, 0, 1),
 	GLOB_ITEM_DBL("step_threshold", 0.0, 0.0, DBL_MAX),
 	GLOB_ITEM_INT("summary_interval", 0, INT_MIN, INT_MAX),
