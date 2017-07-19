@@ -44,6 +44,10 @@
 #include "uds.h"
 #include "util.h"
 
+#ifdef SJA1105_SYNC
+#include "sja1105.h"
+#endif
+
 #define N_CLOCK_PFD (N_POLLFD + 1) /* one extra per port, for the fault timer */
 #define POW2_41 ((double)(1ULL << 41))
 
@@ -1225,12 +1229,20 @@ struct ClockIdentity clock_identity(struct clock *c)
 
 static int clock_resize_pollfd(struct clock *c, int new_nports)
 {
+	int pollfd_num = (new_nports + 1) * N_CLOCK_PFD;
+#ifdef SJA1105_SYNC
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+#endif
 	struct pollfd *new_pollfd;
+
+#ifdef SJA1105_SYNC
+	if (t->valid)
+		pollfd_num += 1;
+#endif
 
 	/* Need to allocate one whole extra block of fds for UDS. */
 	new_pollfd = realloc(c->pollfd,
-			     (new_nports + 1) * N_CLOCK_PFD *
-			     sizeof(struct pollfd));
+			     pollfd_num * sizeof(struct pollfd));
 	if (!new_pollfd) {
 		return -1;
 	}
@@ -1254,6 +1266,9 @@ static void clock_fill_pollfd(struct pollfd *dest, struct port *p)
 
 static void clock_check_pollfd(struct clock *c)
 {
+#ifdef SJA1105_SYNC
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+#endif
 	struct port *p;
 	struct pollfd *dest = c->pollfd;
 
@@ -1265,6 +1280,15 @@ static void clock_check_pollfd(struct clock *c)
 		dest += N_CLOCK_PFD;
 	}
 	clock_fill_pollfd(dest, c->uds_port);
+
+#ifdef SJA1105_SYNC
+	if (t->valid) {
+		dest += N_CLOCK_PFD;
+		sja1105_sync_fill_pollfd(dest);
+		sja1105_sync_timer_settime();
+	}
+#endif
+
 	c->pollfd_valid = 1;
 }
 
@@ -1485,13 +1509,27 @@ void clock_set_sde(struct clock *c, int sde)
 
 int clock_poll(struct clock *c)
 {
-	int cnt, i;
+#ifdef SJA1105_SYNC
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+	struct ClockIdentity clockid;
+#endif
+	int cnt, i, pollfd_num;
 	enum fsm_event event;
 	struct pollfd *cur;
 	struct port *p;
 
+#ifdef SJA1105_SYNC
+	memset(&clockid, 0, sizeof(clockid));
+#endif
+
 	clock_check_pollfd(c);
-	cnt = poll(c->pollfd, (c->nports + 1) * N_CLOCK_PFD, -1);
+
+	pollfd_num = (c->nports + 1) * N_CLOCK_PFD;
+#ifdef SJA1105_SYNC
+	if (t->valid)
+		pollfd_num += 1;
+#endif
+	cnt = poll(c->pollfd, pollfd_num, -1);
 	if (cnt < 0) {
 		if (EINTR == errno) {
 			return 0;
@@ -1504,6 +1542,19 @@ int clock_poll(struct clock *c)
 	}
 
 	cur = c->pollfd;
+
+#ifdef SJA1105_SYNC
+	if (t->valid) {
+		if (cur[pollfd_num - 1].revents & (POLLIN|POLLPRI)) {
+			pr_debug("sja1105: sync timer timeout");
+
+			if (!cid_eq(&c->best_id, &clockid))
+				sja1105_sync(c->clkid);
+
+			sja1105_sync_timer_settime();
+		}
+	}
+#endif
 
 	LIST_FOREACH(p, &c->ports, list) {
 		/* Let the ports handle their events. */

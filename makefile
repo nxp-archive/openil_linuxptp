@@ -22,6 +22,12 @@ CC	?= $(CROSS_COMPILE)gcc
 VER     = -DVER=$(version)
 CFLAGS	= -Wall $(VER) $(incdefs) $(DEBUG) $(EXTRA_CFLAGS)
 LDLIBS	= -lm -lrt $(EXTRA_LDFLAGS)
+
+ifdef SJA1105_ROOTDIR
+CFLAGS  += -I$(SJA1105_ROOTDIR)/usr/include -DSJA1105_SYNC
+LDLIBS  += -L$(SJA1105_ROOTDIR)/usr/lib -lsja1105
+endif
+
 PRG	= ptp4l hwstamp_ctl nsm phc2sys phc_ctl pmc timemaster
 OBJ     = bmc.o clock.o clockadj.o clockcheck.o config.o designated_fsm.o \
 e2e_tc.o fault.o filter.o fsm.o hash.o linreg.o mave.o mmedian.o msg.o ntpshm.o \
@@ -32,6 +38,11 @@ version.o
 
 OBJECTS	= $(OBJ) hwstamp_ctl.o nsm.o phc2sys.o phc_ctl.o pmc.o pmc_common.o \
  sysoff.o timemaster.o
+
+ifdef SJA1105_ROOTDIR
+OBJECTS += sja1105.o
+endif
+
 SRC	= $(OBJECTS:.o=.c)
 DEPEND	= $(OBJECTS:.o=.d)
 srcdir	:= $(dir $(lastword $(MAKEFILE_LIST)))
@@ -53,7 +64,11 @@ man8dir	= $(mandir)/man8
 
 all: $(PRG)
 
+ifdef SJA1105_ROOTDIR
+ptp4l: sja1105.o $(OBJ)
+else
 ptp4l: $(OBJ)
+endif
 
 nsm: config.o filter.o hash.o mave.o mmedian.o msg.o nsm.o print.o raw.o \
  rtnl.o sk.o transport.o tlv.o tsproc.o udp.o udp6.o uds.o util.o version.o

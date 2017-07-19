@@ -36,6 +36,10 @@
 #include "util.h"
 #include "version.h"
 
+#ifdef SJA1105_SYNC
+#include "sja1105.h"
+#endif
+
 static void usage(char *progname)
 {
 	fprintf(stderr,
@@ -52,6 +56,14 @@ static void usage(char *progname)
 		" -H        HARDWARE (default)\n"
 		" -S        SOFTWARE\n"
 		" -L        LEGACY HW\n\n"
+#ifdef SJA1105_SYNC
+		" LS1021ATSN SJA1105 sync Options\n\n"
+		" -t [max]  sync sja1105 switch on ls1021atsn with 'max' us\n"
+		"           time offset. If it exceeds this value, warning\n"
+		"           message will be printed. (10 - INT_MAX)\n"
+		" -R [val]  kp parameter for PI control algorithm. (0.0 - 1.0)\n"
+		" -I [val]  ki parameter for PI control algorithm. (0.0 - 1.0)\n\n"
+#endif
 		" Other Options\n\n"
 		" -f [file] read configuration from 'file'\n"
 		" -i [dev]  interface device to use, for example 'eth0'\n"
@@ -76,6 +88,10 @@ int main(int argc, char *argv[])
 	struct clock *clock = NULL;
 	struct option *opts;
 	struct config *cfg;
+#ifdef SJA1105_SYNC
+	int max_offset;
+	double kp, ki;
+#endif
 
 	if (handle_term_signals())
 		return -1;
@@ -89,8 +105,13 @@ int main(int argc, char *argv[])
 	/* Process the command line arguments. */
 	progname = strrchr(argv[0], '/');
 	progname = progname ? 1+progname : argv[0];
+#ifdef SJA1105_SYNC
+	while (EOF != (c = getopt_long(argc, argv, "AEP246HSLt:R:I:f:i:p:sl:mqvh",
+				       opts, &index))) {
+#else
 	while (EOF != (c = getopt_long(argc, argv, "AEP246HSLf:i:p:sl:mqvh",
 				       opts, &index))) {
+#endif
 		switch (c) {
 		case 0:
 			if (config_parse_option(cfg, opts[index].name, optarg))
@@ -135,6 +156,24 @@ int main(int argc, char *argv[])
 			if (config_set_int(cfg, "time_stamping", TS_LEGACY_HW))
 				goto out;
 			break;
+#ifdef SJA1105_SYNC
+		case 't':
+			if (get_arg_val_i(c, optarg, &max_offset,
+					  10, INT_MAX))
+				goto out;
+			config_set_int(cfg, "sja1105_max_offset", max_offset);
+			break;
+		case 'R':
+			if (get_arg_val_d(c, optarg, &kp, 0.0, 1.0))
+				goto out;
+			config_set_double(cfg, "sja1105_sync_kp", kp);
+			break;
+		case 'I':
+			if (get_arg_val_d(c, optarg, &ki, 0.0, 1.0))
+				goto out;
+			config_set_double(cfg, "sja1105_sync_ki", ki);
+			break;
+#endif
 		case 'f':
 			config = optarg;
 			break;
@@ -239,6 +278,10 @@ int main(int argc, char *argv[])
 	case CLOCK_TYPE_MANAGEMENT:
 		goto out;
 	}
+
+#ifdef SJA1105_SYNC
+	sja1105_sync_timer_create(cfg);
+#endif
 
 	clock = clock_create(type, cfg, req_phc);
 	if (!clock) {
