@@ -97,32 +97,22 @@ int sja1105_sync_timer_settime(void)
 	return 0;
 }
 
-#define DOUBLE_KEEP_31BIT_FRACTION_SHIFT	21
-#define UINT32_LOWER_31BIT_MASK			0x7fffffff
-#define UINT32_UPPER_1BIT_MASK			0x80000000
-
 static int sja1105_set_clock_ratio(double ratio)
 {
-	uint32_t r;
-	double tmp;
-	uint64_t *p = (uint64_t *)(&tmp);
+	int rc;
+	uint32_t ptpclkrate;
 
-	if (ratio <= 0 || ratio >=2 ) {
-		pr_err("sja1105: ratio %f exceeds register range", ratio);
-		return -1;
+	rc = sja1105_ptpclkrate_from_ratio(ratio, &ptpclkrate);
+	if (rc < 0) {
+		pr_err("sja1105_ptpclkrate_from_ratio failed for ratio %lf",
+			ratio);
+		return rc;
 	}
 
-	tmp = ratio < 1 ? ratio + 1 : ratio;
-
-	r = (*p >> DOUBLE_KEEP_31BIT_FRACTION_SHIFT) &
-		UINT32_LOWER_31BIT_MASK;
-
-	if (ratio >= 1)
-		r = r | UINT32_UPPER_1BIT_MASK;
-
-	if (sja1105_ptp_clk_rate_set(&spi_setup, r) < 0) {
-		pr_err("sja1105_ptp_clk_rate_set(%" PRIu32 ") failed", r);
-		return -1;
+	rc = sja1105_ptp_clk_rate_set(&spi_setup, ptpclkrate);
+	if (rc < 0) {
+		pr_err("sja1105_ptp_clk_rate_set failed");
+		return rc;
 	}
 
 	return 0;
