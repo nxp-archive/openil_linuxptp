@@ -26,7 +26,8 @@
 #include "fd.h"
 #include "ddt.h"
 
-#define FD_NUM			2
+#define FD_NUM			3
+#define FD_META			2
 #define MASTER_STABLE_CNT	3
 
 struct cfg {
@@ -45,6 +46,17 @@ struct tc {
 	struct ClockIdentity master_id;
 	bool master_setup;
 	int master_stable;
+};
+
+struct meta_data {
+	char reserve;
+	char tx_ts_byte2;
+	char tx_ts_byte1;
+	char tx_ts_byte0;
+	char dst_mac_byte1;
+	char dst_mac_byte0;
+	char src_port;
+	char switch_id;
 };
 
 extern struct tc	tc;

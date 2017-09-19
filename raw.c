@@ -47,6 +47,9 @@
 #include "sk.h"
 #include "transport_private.h"
 #include "util.h"
+#ifdef SJA1105_TC
+#include "sja1105-ptp.h"
+#endif
 
 struct raw {
 	struct transport t;
@@ -83,14 +86,53 @@ static struct sock_filter raw_filter[N_RAW_FILTER] = {
 	{OP_RETK, 0, 0, 0           }, /*reject*/
 };
 
+#ifdef SJA1105_TC
+/* tcpdump ether src 22:22:22:22:22:22 -dd */
+static struct sock_filter raw_filter_meta[6] = {
+	{ 0x20, 0, 0, 0x00000008 },
+	{ 0x15, 0, 3, 0x22222222 },
+	{ 0x28, 0, 0, 0x00000006 },
+	{ 0x15, 0, 1, 0x00002222 },
+	{ 0x6, 0, 0, 0x00040000 },
+	{ 0x6, 0, 0, 0x00000000 },
+};
+#endif
+
 static int raw_configure(int fd, int event, int index,
 			 unsigned char *addr1, unsigned char *addr2, int enable)
 {
 	int err1, err2, filter_test, option;
 	struct packet_mreq mreq;
 	struct sock_fprog prg = { N_RAW_FILTER, raw_filter };
+#ifdef SJA1105_TC
+	struct sock_fprog prg_meta = { 6, raw_filter_meta };
+	struct sock_fprog *prg_tmp;
+#endif
 
 	filter_test = RAW_FILTER_TEST;
+#ifdef SJA1105_TC
+	switch (event) {
+	case 0:
+		raw_filter[filter_test].jt = 1;
+		raw_filter[filter_test].jf = 0;
+		prg_tmp = &prg;
+		break;
+	case 1:
+		raw_filter[filter_test].jt = 0;
+		raw_filter[filter_test].jf = 1;
+		prg_tmp = &prg;
+		break;
+	/* For meta frame */
+	case 2:
+		prg_tmp = &prg_meta;
+		break;
+	};
+
+	if (setsockopt(fd, SOL_SOCKET, SO_ATTACH_FILTER, prg_tmp, sizeof(struct sock_fprog))) {
+		pr_err("setsockopt SO_ATTACH_FILTER failed: %m");
+		return -1;
+	}
+#else
 	if (event) {
 		raw_filter[filter_test].jt = 0;
 		raw_filter[filter_test].jf = 1;
@@ -103,6 +145,7 @@ static int raw_configure(int fd, int event, int index,
 		pr_err("setsockopt SO_ATTACH_FILTER failed: %m");
 		return -1;
 	}
+#endif
 
 	option = enable ? PACKET_ADD_MEMBERSHIP : PACKET_DROP_MEMBERSHIP;
 
@@ -207,7 +250,11 @@ static int raw_open(struct transport *t, const char *name,
 	struct raw *raw = container_of(t, struct raw, t);
 	unsigned char ptp_dst_mac[MAC_LEN];
 	unsigned char p2p_dst_mac[MAC_LEN];
+#ifdef SJA1105_TC
+	int efd, gfd, mfd;
+#else
 	int efd, gfd;
+#endif
 	char *str;
 
 #ifdef SJA1105_TC
@@ -239,6 +286,11 @@ static int raw_open(struct transport *t, const char *name,
 	if (sk_interface_macaddr(name, &raw->src_addr))
 		goto no_mac;
 
+#ifdef SJA1105_TC
+	mfd = open_socket(name, 2, ptp_dst_mac, p2p_dst_mac);
+	if (mfd < 0)
+		goto no_event;
+#endif
 	efd = open_socket(name, 1, ptp_dst_mac, p2p_dst_mac);
 	if (efd < 0)
 		goto no_event;
@@ -253,6 +305,9 @@ static int raw_open(struct transport *t, const char *name,
 	if (sk_general_init(gfd))
 		goto no_timestamping;
 
+#ifdef SJA1105_TC
+	fda->fd[FD_META] = mfd;
+#endif
 	fda->fd[FD_EVENT] = efd;
 	fda->fd[FD_GENERAL] = gfd;
 	return 0;

@@ -161,21 +161,21 @@ int main(int argc, char *argv[])
 	}
 
 	clock->interface = interface;
-	clock->fd[0].fd = interface->fd_array.fd[FD_EVENT];
-	clock->fd[0].events = POLLIN|POLLPRI;
-	clock->fd[1].fd = interface->fd_array.fd[FD_GENERAL];
-	clock->fd[1].events = POLLIN|POLLPRI;
+	for (i = 0; i < FD_NUM; i++) {
+		clock->fd[i].fd = interface->fd_array.fd[i];
+		clock->fd[i].events = POLLIN|POLLPRI;
+	}
 
 	printf("sja1105-ptp: start up sja1105-ptp. Listen to master ...\n");
 
 	while (true) {
-		cnt = poll(clock->fd, FD_NUM, -1);
+		cnt = poll(clock->fd, FD_NUM - 1, -1);
 		if (cnt <=0) {
 			printf("sja1105-ptp: poll failed!\n");
 			return -1;
 		}
 
-		for (i = 0; i < FD_NUM; i++) {
+		for (i = 0; i < FD_NUM - 1; i++) {
 			if (!(clock->fd[i].revents & (POLLIN|POLLPRI)))
 				continue;
 

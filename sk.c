@@ -35,9 +35,15 @@
 #include "missing.h"
 #include "print.h"
 #include "sk.h"
+#ifdef SJA1105_TC
+#include "sja1105-ptp.h"
+#endif
 
 /* globals */
 
+#ifdef SJA1105_TC
+int sk_meta_timeout = 1;
+#endif
 int sk_tx_timeout = 1;
 int sk_check_fupsync;
 
@@ -224,6 +230,52 @@ int sk_interface_addr(const char *name, int family, struct address *addr)
 static short sk_events = POLLPRI;
 static short sk_revents = POLLPRI;
 
+#ifdef SJA1105_TC
+static int sk_receive_meta(int fd, struct address *addr, struct meta_data *meta)
+{
+	char data[sizeof(struct eth_hdr) + 8];
+	char control[256];
+	struct msghdr msg;
+	struct iovec iov = { data, sizeof(data) };
+	struct pollfd fd_meta = { fd, POLLIN|POLLPRI, 0 };
+	int cnt, res;
+
+	memset(control, 0, sizeof(control));
+	memset(&msg, 0, sizeof(msg));
+
+	if (addr) {
+		msg.msg_name = &addr->ss;
+		msg.msg_namelen = sizeof(addr->ss);
+	}
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = control;
+
+	res = poll(&fd_meta, 1, sk_meta_timeout);
+	if (res <= 0) {
+		printf("failed to poll fd_meta, or time out\n");
+		return -1;
+	}
+
+	cnt = recvmsg(fd, &msg, 0);
+	if (cnt < 1) {
+		printf("failed to receive meta frame!\n");
+		return -1;
+	}
+
+	memcpy(meta, &data[sizeof(struct eth_hdr)], sizeof(struct meta_data));
+
+/*
+	printf("receive meta frame:");
+	int i;
+	for (i = 0; i < 8; i++)
+		printf("%x ", data[sizeof(struct eth_hdr) + i]);
+	printf("\n");
+*/
+	return 0;
+}
+#endif
+
 int sk_receive(int fd, void *buf, int buflen,
 	       struct address *addr, struct hw_timestamp *hwts, int flags)
 {
@@ -233,6 +285,10 @@ int sk_receive(int fd, void *buf, int buflen,
 	struct iovec iov = { buf, buflen };
 	struct msghdr msg;
 	struct timespec *sw, *ts = NULL;
+#ifdef SJA1105_TC
+	struct host_if *interface = &tc_host_if;
+	struct meta_data meta;
+#endif
 
 	memset(control, 0, sizeof(control));
 	memset(&msg, 0, sizeof(msg));
@@ -264,6 +320,14 @@ int sk_receive(int fd, void *buf, int buflen,
 	if (cnt < 1)
 		pr_err("recvmsg%sfailed: %m",
 		       flags == MSG_ERRQUEUE ? " tx timestamp " : " ");
+#ifdef SJA1105_TC
+	else {
+		if (flags != MSG_ERRQUEUE) {
+			if (sk_receive_meta(interface->fd_array.fd[FD_META], addr, &meta))
+				return -1;
+		}
+	}
+#endif
 
 	for (cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm)) {
 		level = cm->cmsg_level;
