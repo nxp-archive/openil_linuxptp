@@ -299,11 +299,13 @@ static int raw_open(struct transport *t, const char *name,
 	if (gfd < 0)
 		goto no_general;
 
+#ifndef SJA1105_TC
 	if (sk_timestamping_init(efd, name, ts_type, TRANS_IEEE_802_3))
 		goto no_timestamping;
 
 	if (sk_general_init(gfd))
 		goto no_timestamping;
+#endif
 
 #ifdef SJA1105_TC
 	fda->fd[FD_META] = mfd;
@@ -312,7 +314,9 @@ static int raw_open(struct transport *t, const char *name,
 	fda->fd[FD_GENERAL] = gfd;
 	return 0;
 
+#ifndef SJA1105_TC
 no_timestamping:
+#endif
 	close(gfd);
 no_general:
 	close(efd);

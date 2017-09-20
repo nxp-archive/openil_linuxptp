@@ -37,6 +37,7 @@
 #include "sk.h"
 #ifdef SJA1105_TC
 #include "sja1105-ptp.h"
+#include "msg.h"
 #endif
 
 /* globals */
@@ -279,15 +280,25 @@ static int sk_receive_meta(int fd, struct address *addr, struct meta_data *meta)
 int sk_receive(int fd, void *buf, int buflen,
 	       struct address *addr, struct hw_timestamp *hwts, int flags)
 {
+#ifdef SJA1105_TC
+	char control[256];
+	int cnt = 0, res = 0;
+	struct iovec iov = { buf, buflen };
+	struct msghdr msg;
+	struct timespec *ts = NULL;
+
+	struct host_if *interface = &tc_host_if;
+	struct meta_data meta;
+	struct ptp_message *ptp_msg;
+	int cnt_send;
+	struct sja1105_mgmt_entry sja1105_mgmt;
+#else
 	char control[256];
 	int cnt = 0, res = 0, level, type;
 	struct cmsghdr *cm;
 	struct iovec iov = { buf, buflen };
 	struct msghdr msg;
 	struct timespec *sw, *ts = NULL;
-#ifdef SJA1105_TC
-	struct host_if *interface = &tc_host_if;
-	struct meta_data meta;
 #endif
 
 	memset(control, 0, sizeof(control));
@@ -325,10 +336,27 @@ int sk_receive(int fd, void *buf, int buflen,
 		if (flags != MSG_ERRQUEUE) {
 			if (sk_receive_meta(interface->fd_array.fd[FD_META], addr, &meta))
 				return -1;
+
+			sja1105_mgmt.destports = SJA1105_PORT & ~SJA1105_PORT_HOST &
+						    ~(1 << meta.src_port);
+			sja1105_mgmt.macaddr = PTP_E2E_ETH_MULTI_ADDR;
+
+			if (sja1105_mgmt_route_set(&spi_setup, &sja1105_mgmt, 0))
+				return -1;
+
+			ptp_msg = buf + sizeof(struct eth_hdr);
+
+			cnt_send = send(fd, buf, sizeof(struct eth_hdr) +
+				ntohs(ptp_msg->header.messageLength), 0);
+			if (cnt_send < 1) {
+				printf("failed to forward message!\n");
+				return -1;
+			}
 		}
 	}
 #endif
 
+#ifndef SJA1105_TC
 	for (cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm)) {
 		level = cm->cmsg_level;
 		type  = cm->cmsg_type;
@@ -348,6 +376,7 @@ int sk_receive(int fd, void *buf, int buflen,
 			hwts->sw = *sw;
 		}
 	}
+#endif
 
 	if (addr)
 		addr->len = msg.msg_namelen;

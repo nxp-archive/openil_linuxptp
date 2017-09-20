@@ -26,9 +26,18 @@
 #include "fd.h"
 #include "ddt.h"
 
+#include <sja1105/ptp.h>
+#include <sja1105/dynamic-config.h>
+
 #define FD_NUM			3
 #define FD_META			2
+
 #define MASTER_STABLE_CNT	3
+
+#define SJA1105_PORT		0x001f
+#define SJA1105_PORT_HOST	0x0010
+
+#define PTP_E2E_ETH_MULTI_ADDR	0x011B19000000
 
 struct cfg {
 	char *if_name;
@@ -62,5 +71,7 @@ struct meta_data {
 extern struct tc	tc;
 extern struct cfg	tc_cfg;
 extern struct host_if	tc_host_if;
+
+extern struct sja1105_spi_setup		spi_setup;
 
 #endif

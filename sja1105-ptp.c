@@ -35,6 +35,16 @@ struct tc	tc;
 struct cfg	tc_cfg;
 struct host_if	tc_host_if;
 
+struct sja1105_spi_setup spi_setup = {
+	.device    = "/dev/spidev0.1",
+	.mode      = SPI_CPHA,
+	.bits      = 8,
+	.speed     = 10000000,
+	.delay     = 0,
+	.cs_change = 0,
+	.fd        = -1,
+};
+
 static void usage(void)
 {
 	printf("\nusage: sja1105-ptp [options]\n\n \
@@ -113,7 +123,7 @@ static int interface_recv(struct host_if *interface, int index)
 	}
 
 	err = msg_post_recv(msg, cnt);
-	if (err) {
+	if (err && (err != -ETIME)) {
 		switch (err) {
 		case -EBADMSG:
 			printf("sja1105-ptp: bad message\n");
@@ -149,6 +159,16 @@ int main(int argc, char *argv[])
 
 	if (get_cfg(argc, argv, config))
 		return -1;
+
+	if (sja1105_spi_configure(&spi_setup) < 0) {
+		printf("spi_configure failed");
+		return -1;
+	}
+
+	if (sja1105_ptp_reset(&spi_setup)) {
+		printf("sja1105: reset failed");
+		return -1;
+	}
 
 	interface->name = config->if_name;
 	interface->trans = raw_transport_create();
