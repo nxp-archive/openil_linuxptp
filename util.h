@@ -22,6 +22,7 @@
 
 #include "ddt.h"
 #include "ether.h"
+#include <time.h>
 
 /**
  * Table of human readable strings, one for each port state.
