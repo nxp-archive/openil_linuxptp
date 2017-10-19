@@ -24,8 +24,8 @@ CFLAGS	= -Wall $(VER) $(incdefs) $(DEBUG) $(EXTRA_CFLAGS)
 LDLIBS	= -lm -lrt $(EXTRA_LDFLAGS)
 
 ifdef SJA1105_ROOTDIR
-CFLAGS  += -I$(SJA1105_ROOTDIR)/usr/include -DSJA1105_SYNC
-LDLIBS  += -L$(SJA1105_ROOTDIR)/usr/lib -lsja1105
+CFLAGS  += -I$(SJA1105_ROOTDIR)/include -DSJA1105_SYNC
+LDLIBS  += -L$(SJA1105_ROOTDIR)/lib -lsja1105
 endif
 
 PRG	= ptp4l hwstamp_ctl nsm phc2sys phc_ctl pmc timemaster
