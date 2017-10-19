@@ -36,9 +36,21 @@ struct sja1105_spi_setup spi_setup = {
 	.fd        = -1,
 };
 
-int sja1105_sync_timer_create(struct config *config)
+struct sja1105_sync_timer    sja1105_sync_t;
+struct sja1105_sync_pi_servo sja1105_sync_pi_s;
+
+int sja1105_sync_timer_is_valid()
 {
 	struct sja1105_sync_timer *t = &sja1105_sync_t;
+	return t->valid;
+}
+
+/* Initialize the global struct sja1105_sync_t and
+ * struct sja1105_sync_pi_s.
+ */
+int sja1105_sync_timer_create(struct config *config)
+{
+	struct sja1105_sync_timer    *t = &sja1105_sync_t;
 	struct sja1105_sync_pi_servo *s = &sja1105_sync_pi_s;
 
 	t->max_offset = config_get_int(config, NULL, "sja1105_max_offset");

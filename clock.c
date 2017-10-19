@@ -1230,13 +1230,10 @@ struct ClockIdentity clock_identity(struct clock *c)
 static int clock_resize_pollfd(struct clock *c, int new_nports)
 {
 	int pollfd_num = (new_nports + 1) * N_CLOCK_PFD;
-#ifdef SJA1105_SYNC
-	struct sja1105_sync_timer *t = &sja1105_sync_t;
-#endif
 	struct pollfd *new_pollfd;
 
 #ifdef SJA1105_SYNC
-	if (t->valid)
+	if (sja1105_sync_timer_is_valid())
 		pollfd_num += 1;
 #endif
 
@@ -1266,9 +1263,6 @@ static void clock_fill_pollfd(struct pollfd *dest, struct port *p)
 
 static void clock_check_pollfd(struct clock *c)
 {
-#ifdef SJA1105_SYNC
-	struct sja1105_sync_timer *t = &sja1105_sync_t;
-#endif
 	struct port *p;
 	struct pollfd *dest = c->pollfd;
 
@@ -1282,7 +1276,7 @@ static void clock_check_pollfd(struct clock *c)
 	clock_fill_pollfd(dest, c->uds_port);
 
 #ifdef SJA1105_SYNC
-	if (t->valid) {
+	if (sja1105_sync_timer_is_valid()) {
 		dest += N_CLOCK_PFD;
 		sja1105_sync_fill_pollfd(dest);
 		sja1105_sync_timer_settime();
@@ -1510,7 +1504,6 @@ void clock_set_sde(struct clock *c, int sde)
 int clock_poll(struct clock *c)
 {
 #ifdef SJA1105_SYNC
-	struct sja1105_sync_timer *t = &sja1105_sync_t;
 	struct ClockIdentity clockid;
 #endif
 	int cnt, i, pollfd_num;
@@ -1526,7 +1519,7 @@ int clock_poll(struct clock *c)
 
 	pollfd_num = (c->nports + 1) * N_CLOCK_PFD;
 #ifdef SJA1105_SYNC
-	if (t->valid)
+	if (sja1105_sync_timer_is_valid())
 		pollfd_num += 1;
 #endif
 	cnt = poll(c->pollfd, pollfd_num, -1);
@@ -1544,7 +1537,7 @@ int clock_poll(struct clock *c)
 	cur = c->pollfd;
 
 #ifdef SJA1105_SYNC
-	if (t->valid) {
+	if (sja1105_sync_timer_is_valid()) {
 		if (cur[pollfd_num - 1].revents & (POLLIN|POLLPRI)) {
 			pr_debug("sja1105: sync timer timeout");
 
