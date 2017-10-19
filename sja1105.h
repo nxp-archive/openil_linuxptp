@@ -38,9 +38,7 @@ struct sja1105_sync_pi_servo {
 	int64_t drift_sum;
 };
 
-struct sja1105_sync_timer sja1105_sync_t;
-struct sja1105_sync_pi_servo sja1105_sync_pi_s;
-
+int sja1105_sync_timer_is_valid();
 int sja1105_sync_timer_create(struct config *config);
 void sja1105_sync_fill_pollfd(struct pollfd *dest);
 int sja1105_sync_timer_settime(void);
