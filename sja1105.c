@@ -108,37 +108,12 @@ int sja1105_sync_timer_settime(void)
 	return 0;
 }
 
-/* Apply the ratio contained in struct sja1105_sync_timer
- * to the hardware.
- */
-static int sja1105_set_clock_ratio(struct sja1105_sync_timer *t)
-{
-	int rc;
-	uint32_t ptpclkrate;
-
-	rc = sja1105_ptpclkrate_from_ratio(t->ratio, &ptpclkrate);
-	if (rc < 0) {
-		pr_err("sja1105_ptpclkrate_from_ratio failed for ratio %lf",
-		       t->ratio);
-		return rc;
-	}
-
-	rc = sja1105_ptp_clk_rate_set(&spi_setup, ptpclkrate);
-	if (rc < 0) {
-		pr_err("sja1105_ptp_clk_rate_set failed");
-		return rc;
-	}
-
-	return 0;
-}
-
 /* Calculate delay and offset between
  * clkid and SJA1105 PTP clock
  */
 static int sja1105_calculate(clockid_t clkid, int64_t *delay, int64_t *offset)
 {
-	struct timespec t1_spec, t3_spec;
-	uint64_t t2_ns;
+	struct timespec t1_spec, t2_spec, t3_spec;
 	int gettings;
 	int64_t interval, best_interval = INT64_MAX;
 	int rc1, rc2, rc3;
@@ -149,7 +124,7 @@ static int sja1105_calculate(clockid_t clkid, int64_t *delay, int64_t *offset)
 	/* Pick the best interval */
 	for (gettings = 0; gettings < 3; gettings ++) {
 		if ((rc1 = clock_gettime(clkid, &t1_spec)) ||
-		    (rc2 = sja1105_ptp_clk_get(&spi_setup, &t2_ns)) < 0 ||
+		    (rc2 = sja1105_ptp_clk_get(&spi_setup, &t2_spec)) < 0 ||
 		    (rc3 = clock_gettime(clkid, &t3_spec))) {
 			pr_err("rc1 %d rc2 %d rc3 %d", rc1, rc2, rc3);
 			pr_err("sja1105: calculating got time error");
@@ -160,8 +135,9 @@ static int sja1105_calculate(clockid_t clkid, int64_t *delay, int64_t *offset)
 		           (t3_spec.tv_nsec - t1_spec.tv_nsec);
 		if (interval < best_interval) {
 			best_interval = interval;
-			*offset = t2_ns * 8 - t1_spec.tv_sec * NS_PER_SEC -
-			          t1_spec.tv_nsec - interval / 2;
+			*offset = t2_spec.tv_sec * NS_PER_SEC + t2_spec.tv_nsec -
+			         (t1_spec.tv_sec * NS_PER_SEC + t1_spec.tv_nsec) -
+			          interval / 2;
 		}
 	}
 	*delay = best_interval / 2;
@@ -197,13 +173,13 @@ int sja1105_sync(clockid_t clkid)
 	struct sja1105_sync_timer *t = &sja1105_sync_t;
 	struct sja1105_sync_pi_servo *s = &t->sync_pi_s;
 	struct timespec cur_t;
-	uint64_t cur_ns;
 	int64_t delay, offset;
+	struct timespec offset_ts;
 
 	if (t->reset_req) {
 		/* Step 1, reset sja1105 ratio */
 		t->ratio = 1.0f;
-		if (sja1105_set_clock_ratio(t)) {
+		if (sja1105_ptp_clk_rate_set(&spi_setup, t->ratio)) {
 			pr_err("sja1105: set_clock_ratio failed");
 			return -1;
 		}
@@ -214,9 +190,8 @@ int sja1105_sync(clockid_t clkid)
 			pr_err("sja1105: clock_gettime error");
 			return -1;
 		}
-		cur_ns = (uint64_t) (cur_t.tv_sec - 1) * NS_PER_SEC +
-		         (uint64_t) cur_t.tv_nsec;
-		if (sja1105_ptp_clk_set(&spi_setup, cur_ns / 8) < 0) {
+		cur_t.tv_sec -= 1;
+		if (sja1105_ptp_clk_set(&spi_setup, &cur_t) < 0) {
 			pr_err("sja1105_ptp_clk_set failed");
 			return -1;
 		}
@@ -226,7 +201,9 @@ int sja1105_sync(clockid_t clkid)
 		/* Step 4, set offset into PTPCLKADD */
 		if (offset > 0)
 			return -1;
-		if (sja1105_ptp_clk_add(&spi_setup, - offset / 8) < 0) {
+		offset_ts.tv_sec  = (-offset) / NS_PER_SEC;
+		offset_ts.tv_nsec = (-offset) % NS_PER_SEC;
+		if (sja1105_ptp_clk_add(&spi_setup, &offset_ts) < 0) {
 			pr_err("sja1105_ptp_clk_add failed");
 			return -1;
 		}
@@ -250,7 +227,7 @@ int sja1105_sync(clockid_t clkid)
 	/* Apply adjustment to the SJA1105 clock ratio
 	 * according to the PI algorithm */
 	t->ratio = 1 + sja1105_sync_run_pi_servo(offset);
-	if (sja1105_set_clock_ratio(t))
+	if (sja1105_ptp_clk_rate_set(&spi_setup, t->ratio))
 		return -1;
 
 	return 0;
