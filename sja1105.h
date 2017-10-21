@@ -24,6 +24,12 @@
 
 #include "config.h"
 
+enum qbv_state {
+	QBV_STATE_DISABLED,
+	QBV_STATE_ENABLED_NOT_RUNNING,
+	QBV_STATE_RUNNING,
+};
+
 struct sja1105_sync_pi_servo {
 	double kp;
 	double ki;
@@ -37,7 +43,9 @@ struct sja1105_sync_timer {
 	int     reset_req;
 	double  ratio;
 	int     have_qbv;
+	enum    qbv_state qbv_state;
 	struct  timespec qbv_cycle_len;
+	struct  timespec qbv_start_time;
 	struct  sja1105_sync_pi_servo sync_pi_s;
 };
 

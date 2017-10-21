@@ -237,6 +237,157 @@ static double sja1105_sync_run_pi_servo(int64_t offset)
 	return (double)adj / (double)ADJ_SCALE;
 }
 
+int timespec_lower(const struct timespec *lhs, const struct timespec *rhs)
+{
+	if (lhs->tv_sec == rhs->tv_sec)
+		return lhs->tv_nsec < rhs->tv_nsec;
+	else
+		return lhs->tv_sec < rhs->tv_sec;
+}
+
+void timespec_diff(const struct timespec *start, const struct timespec *stop,
+                   struct timespec *result)
+{
+	if ((stop->tv_nsec - start->tv_nsec) < 0) {
+		result->tv_sec = stop->tv_sec - start->tv_sec - 1;
+		result->tv_nsec = stop->tv_nsec - start->tv_nsec + NS_PER_SEC;
+	} else {
+		result->tv_sec = stop->tv_sec - start->tv_sec;
+		result->tv_nsec = stop->tv_nsec - start->tv_nsec;
+	}
+}
+
+int sja1105_qbv_stop()
+{
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+	int rc;
+
+	if (t->have_qbv == 0)
+		return -1;
+	if (t->qbv_state == QBV_STATE_DISABLED) {
+		pr_debug("sja1105: qbv disabled, no need to stop");
+		return 0;
+	}
+	rc = sja1105_ptp_qbv_stop(&spi_setup);
+	if (rc < 0) {
+		pr_err("sja1105_ptp_qbv_stop failed");
+		return -1;
+	}
+	return 0;
+}
+
+int sja1105_qbv_start()
+{
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+	struct timespec ptpclk_now;
+	uint64_t ptpclk_now_ns;
+	uint64_t qbv_cycle_len_ns;
+	uint64_t qbv_start_time_ns;
+	int rc;
+
+	if (t->have_qbv == 0)
+		return -1;
+	rc = sja1105_ptp_clk_get(&spi_setup, &ptpclk_now);
+	if (rc < 0) {
+		pr_err("failed to read ptpclk");
+		return -1;
+	}
+	sja1105_timespec_to_ptp_time(&ptpclk_now, &ptpclk_now_ns);
+	sja1105_timespec_to_ptp_time(&t->qbv_cycle_len, &qbv_cycle_len_ns);
+	/* Delay start time to the beginning of the 3.000'th Qbv cycle from now.
+	 * This should buy us some time.
+	 */
+	qbv_start_time_ns = (3000 + ptpclk_now_ns / qbv_cycle_len_ns) * qbv_cycle_len_ns;
+	sja1105_ptp_time_to_timespec(&t->qbv_start_time, qbv_start_time_ns);
+	rc = sja1105_ptp_qbv_start_time_set(&spi_setup, &t->qbv_start_time);
+	if (rc < 0) {
+		pr_err("sja1105_ptp_qbv_start_time_set failed");
+		return -1;
+	}
+	rc = sja1105_ptp_qbv_correction_period_set(&spi_setup,
+	                                           &t->qbv_cycle_len);
+	if (rc < 0) {
+		pr_err("sja1105_ptp_qbv_correction_period_set failed");
+		return -1;
+	}
+	rc = sja1105_ptp_qbv_start(&spi_setup);
+	if (rc < 0) {
+		pr_err("sja1105_ptp_qbv_start failed");
+		return -1;
+	}
+	return 0;
+}
+
+int sja1105_qbv_monitor(int64_t delay, int64_t offset)
+{
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+	struct timespec ptpclk;
+	struct timespec diff;
+
+	if (t->have_qbv == 0)
+		return -1;
+	pr_debug("sja1105 ratio: %lf", t->ratio);
+
+	switch (t->qbv_state) {
+	case QBV_STATE_DISABLED:
+		pr_debug("%s: state disabled", __func__);
+		if (t->reset_req)
+			break;
+		if (offset <= -(t->max_offset / 2) ||
+		    offset >=   t->max_offset / 2)
+			break;
+		/* Offset is good enough, start Qbv engine */
+		if (sja1105_qbv_start() < 0) {
+			pr_err("sja1105_qbv_start failed");
+			return -1;
+		}
+		t->qbv_state = QBV_STATE_ENABLED_NOT_RUNNING;
+		break;
+	case QBV_STATE_ENABLED_NOT_RUNNING:
+		/* Check if Qbv engine has actually started, by
+		 * comparing the scheduled start time with the
+		 * SJA1105 PTP clock
+		 */
+		pr_debug("%s: state enabled not running", __func__);
+		if (t->reset_req) {
+			sja1105_qbv_stop();
+			t->qbv_state = QBV_STATE_DISABLED;
+			break;
+		}
+		if (sja1105_ptp_clk_get(&spi_setup, &ptpclk) < 0) {
+			pr_err("failed to read ptpclk");
+			return -1;
+		}
+		if (timespec_lower(&ptpclk, &t->qbv_start_time)) {
+			/* Qbv has not started yet */
+			timespec_diff(&ptpclk, &t->qbv_start_time, &diff);
+			pr_debug("time to start: [%ld.%09ld]",
+			         diff.tv_sec, diff.tv_nsec);
+		} else {
+			/* Qbv has started */
+			t->qbv_state = QBV_STATE_RUNNING;
+			pr_debug("%s: transitioned to running state", __func__);
+		}
+		break;
+	case QBV_STATE_RUNNING:
+		pr_debug("sja1105_qbv_monitor: state running");
+		if (t->reset_req) {
+			sja1105_qbv_stop();
+			t->qbv_state = QBV_STATE_DISABLED;
+			break;
+		}
+		if (sja1105_ptp_clk_get(&spi_setup, &ptpclk) < 0) {
+			pr_err("failed to read ptpclk");
+			return -1;
+		}
+		timespec_diff(&t->qbv_start_time, &ptpclk, &diff);
+		pr_debug("time since started: [%ld.%09ld]",
+		         diff.tv_sec, diff.tv_nsec);
+		break;
+	}
+	return 0;
+}
+
 int sja1105_sync(clockid_t clkid)
 {
 	struct sja1105_sync_timer *t = &sja1105_sync_t;
@@ -302,6 +453,7 @@ int sja1105_sync(clockid_t clkid)
 		return -1;
 	}
 
+	sja1105_qbv_monitor(delay, offset);
 	t->reset_req = 0;
 	return 0;
 }
