@@ -36,6 +36,8 @@ struct sja1105_sync_timer {
 	int64_t max_offset;
 	int     reset_req;
 	double  ratio;
+	int     have_qbv;
+	struct  timespec qbv_cycle_len;
 	struct  sja1105_sync_pi_servo sync_pi_s;
 };
 

@@ -18,6 +18,13 @@
  * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 #include <sja1105/ptp.h>
+#include <sja1105/staging-area.h>
+#include <sja1105/static-config.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdlib.h>
 
 #include "missing.h"
 #include "print.h"
@@ -42,6 +49,63 @@ int sja1105_sync_timer_is_valid()
 {
 	struct sja1105_sync_timer *t = &sja1105_sync_t;
 	return t->valid;
+}
+
+int sja1105_parse_staging_area(char *filename)
+{
+	struct sja1105_sync_timer *t = &sja1105_sync_t;
+	struct sja1105_staging_area staging_area;
+	unsigned int staging_area_len;
+	struct stat stat;
+	uint64_t delta;
+	int    i, fd;
+	char  *buf;
+
+	fd = open(filename, O_RDONLY);
+	if (fd < 0) {
+		pr_err("Cannot open staging area at %s!", filename);
+		return -1;
+	}
+	if (fstat(fd, &stat) < 0) {
+		pr_err("could not read staging area file size");
+		return -1;
+	}
+	staging_area_len = stat.st_size;
+	buf = (char*) malloc(staging_area_len * sizeof(char));
+	if (!buf) {
+		pr_err("malloc failed");
+		return -1;
+	}
+	if (read(fd, buf, staging_area_len) < 0) {
+		pr_err("read failed from staging area");
+		return -1;
+	}
+	/* Static config */
+	if (sja1105_static_config_unpack(buf, &staging_area.static_config) < 0) {
+		pr_err("error while interpreting config");
+		return -1;
+	}
+
+	if (staging_area.static_config.schedule_entry_points_params_count > 0 &&
+	    staging_area.static_config.schedule_entry_points_params[0].clksrc == 3) {
+		/* Qbv is enabled, and clock source is PTP */
+		pr_debug("SJA1105 configuration has Qbv enabled.");
+		t->have_qbv = 1;
+		delta = 0;
+		for (i = 0; i < staging_area.static_config.schedule_count; i++) {
+			pr_debug("timeslot %i: delta %llu", i,
+			         staging_area.static_config.schedule[i].delta);
+			delta += staging_area.static_config.schedule[i].delta;
+		}
+		t->qbv_cycle_len.tv_sec  = (delta * 200) / NS_PER_SEC;
+		t->qbv_cycle_len.tv_nsec = (delta * 200) % NS_PER_SEC;
+		pr_debug("Qbv cycle duration is [%ld.%09ld]",
+		         t->qbv_cycle_len.tv_sec,
+		         t->qbv_cycle_len.tv_nsec);
+	} else
+		t->have_qbv = 0;
+	close(fd);
+	return 0;
 }
 
 /* Initialize the global struct sja1105_sync_t and
@@ -79,6 +143,11 @@ int sja1105_sync_timer_create(struct config *config)
 
 	s->kp = config_get_double(config, NULL, "sja1105_sync_kp");
 	s->ki = config_get_double(config, NULL, "sja1105_sync_ki");
+
+	if (sja1105_parse_staging_area("/lib/firmware/sja1105.bin") < 0) {
+		pr_err("Parsing staging area failed");
+		return -1;
+	}
 
 	return 0;
 }
