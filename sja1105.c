@@ -37,7 +37,6 @@ struct sja1105_spi_setup spi_setup = {
 };
 
 struct sja1105_sync_timer    sja1105_sync_t;
-struct sja1105_sync_pi_servo sja1105_sync_pi_s;
 
 int sja1105_sync_timer_is_valid()
 {
@@ -51,7 +50,7 @@ int sja1105_sync_timer_is_valid()
 int sja1105_sync_timer_create(struct config *config)
 {
 	struct sja1105_sync_timer    *t = &sja1105_sync_t;
-	struct sja1105_sync_pi_servo *s = &sja1105_sync_pi_s;
+	struct sja1105_sync_pi_servo *s = &t->sync_pi_s;
 
 	t->max_offset = config_get_int(config, NULL, "sja1105_max_offset");
 	if (!t->max_offset) {
@@ -178,7 +177,7 @@ static int sja1105_calculate(clockid_t clkid, int64_t *delay, int64_t *offset)
  **/
 static double sja1105_sync_run_pi_servo(int64_t offset)
 {
-	struct sja1105_sync_pi_servo *s = &sja1105_sync_pi_s;
+	struct sja1105_sync_pi_servo *s = &sja1105_sync_t.sync_pi_s;
 	int64_t adj;
 
 	s->drift_sum += offset * s->ki;
@@ -196,7 +195,7 @@ static double sja1105_sync_run_pi_servo(int64_t offset)
 int sja1105_sync(clockid_t clkid)
 {
 	struct sja1105_sync_timer *t = &sja1105_sync_t;
-	struct sja1105_sync_pi_servo *s = &sja1105_sync_pi_s;
+	struct sja1105_sync_pi_servo *s = &t->sync_pi_s;
 	struct timespec cur_t;
 	uint64_t cur_ns;
 	int64_t delay, offset;
