@@ -24,18 +24,19 @@
 
 #include "config.h"
 
-struct sja1105_sync_timer {
-	int fd;
-	int valid;
-	int max_offset;
-	int reset_req;
-	double ratio;
-};
-
 struct sja1105_sync_pi_servo {
 	double kp;
 	double ki;
 	int64_t drift_sum;
+};
+
+struct sja1105_sync_timer {
+	int     fd;
+	int     valid;
+	int64_t max_offset;
+	int     reset_req;
+	double  ratio;
+	struct  sja1105_sync_pi_servo sync_pi_s;
 };
 
 int sja1105_sync_timer_is_valid();
