@@ -458,3 +458,8 @@ int sja1105_sync(clockid_t clkid)
 	t->reset_req = 0;
 	return 0;
 }
+
+void sja1105_sync_timer_destroy()
+{
+	sja1105_qbv_stop();
+}
