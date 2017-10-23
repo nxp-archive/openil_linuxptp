@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "missing.h"
 #include "print.h"
