@@ -54,5 +54,6 @@ int sja1105_sync_timer_create(struct config *config);
 void sja1105_sync_fill_pollfd(struct pollfd *dest);
 int sja1105_sync_timer_settime(void);
 int sja1105_sync(clockid_t clkid);
+void sja1105_sync_timer_destroy();
 
 #endif
