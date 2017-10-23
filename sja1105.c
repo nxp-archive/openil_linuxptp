@@ -367,15 +367,28 @@ int sja1105_qbv_monitor(int64_t delay, int64_t offset)
 			pr_debug("time to start: [%ld.%09ld]",
 			         diff.tv_sec, diff.tv_nsec);
 		} else {
-			/* Qbv has started */
-			t->qbv_state = QBV_STATE_RUNNING;
-			pr_debug("%s: transitioned to running state", __func__);
+			/* Time elapsed, what happened? */
+			if (sja1105_ptp_qbv_running(&spi_setup) == 0) {
+				/* Qbv has started */
+				t->qbv_state = QBV_STATE_RUNNING;
+				pr_debug("%s: transitioned to running state",
+				         __func__);
+			} else {
+				t->qbv_state = QBV_STATE_DISABLED;
+				pr_err("%s: not started despite time elapsed",
+				       __func__);
+			}
 		}
 		break;
 	case QBV_STATE_RUNNING:
-		pr_debug("sja1105_qbv_monitor: state running");
+		pr_debug("%s: state running", __func__);
 		if (t->reset_req) {
 			sja1105_qbv_stop();
+			t->qbv_state = QBV_STATE_DISABLED;
+			break;
+		}
+		if (sja1105_ptp_qbv_running(&spi_setup) != 0) {
+			pr_debug("%s: surprisingly stopped", __func__);
 			t->qbv_state = QBV_STATE_DISABLED;
 			break;
 		}
