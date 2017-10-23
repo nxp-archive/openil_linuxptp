@@ -414,6 +414,11 @@ int sja1105_sync(clockid_t clkid)
 
 	if (t->reset_req) {
 		pr_err("sja1105 reset requested");
+		/* Step 0, reset sja1105 switch */
+		if (sja1105_ptp_reset(&spi_setup)) {
+			pr_err("sja1105: reset failed");
+			return -1;
+		}
 		/* Step 1, reset sja1105 ratio */
 		t->ratio = 1.0f;
 		if (sja1105_ptp_clk_rate_set(&spi_setup, t->ratio)) {
