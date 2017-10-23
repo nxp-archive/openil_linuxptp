@@ -293,13 +293,15 @@ int sja1105_qbv_start()
 		pr_err("failed to read ptpclk");
 		return -1;
 	}
+	/* Delay start time to the beginning of the first Qbv cycle that starts
+	 * at least 3 seconds from now. This should buy us some time.
+	 */
+	ptpclk_now.tv_sec += 3;
 	sja1105_timespec_to_ptp_time(&ptpclk_now, &ptpclk_now_ns);
 	sja1105_timespec_to_ptp_time(&t->qbv_cycle_len, &qbv_cycle_len_ns);
-	/* Delay start time to the beginning of the 3.000'th Qbv cycle from now.
-	 * This should buy us some time.
-	 */
-	qbv_start_time_ns = (3000 + ptpclk_now_ns / qbv_cycle_len_ns) * qbv_cycle_len_ns;
+	qbv_start_time_ns = (1 + ptpclk_now_ns / qbv_cycle_len_ns) * qbv_cycle_len_ns;
 	sja1105_ptp_time_to_timespec(&t->qbv_start_time, qbv_start_time_ns);
+
 	rc = sja1105_ptp_qbv_start_time_set(&spi_setup, &t->qbv_start_time);
 	if (rc < 0) {
 		pr_err("sja1105_ptp_qbv_start_time_set failed");
