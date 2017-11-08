@@ -139,9 +139,10 @@ static int interface_recv(struct host_if *interface, int index)
 		return -1;
 	}
 
-	//printf("sja11-5-tc: recv msg %s\n", msg_type_string(msg_type(msg)));
 	switch (msg_type(msg)) {
 	case SYNC:
+		//printf("sja1105-ptp: recv SYNC, timestamp %ld.%09ld\n",
+		//	msg->hwts.ts.tv_sec, msg->hwts.ts.tv_nsec);
 		process_sync(msg);
 		break;
 	}

@@ -285,13 +285,14 @@ int sk_receive(int fd, void *buf, int buflen,
 	int cnt = 0, res = 0;
 	struct iovec iov = { buf, buflen };
 	struct msghdr msg;
-	struct timespec *ts = NULL;
 
 	struct host_if *interface = &tc_host_if;
 	struct meta_data meta;
 	struct ptp_message *ptp_msg;
 	int cnt_send;
 	struct sja1105_mgmt_entry sja1105_mgmt;
+	struct timespec ts;
+	uint64_t rx_ts;
 #else
 	char control[256];
 	int cnt = 0, res = 0, level, type;
@@ -381,6 +382,21 @@ int sk_receive(int fd, void *buf, int buflen,
 	if (addr)
 		addr->len = msg.msg_namelen;
 
+#ifdef SJA1105_TC
+	if (sja1105_ptp_clk_get(&spi_setup, &ts)) {
+		printf("failed to get sja1105 clock for rx timestamp!\n");
+		return -1;
+	}
+
+	rx_ts = (ts.tv_sec *NS_PER_SEC + ts.tv_nsec) / 8;
+	rx_ts &= ~0xffffff;
+	rx_ts |= meta.rx_ts_byte2 << 16 |
+		 meta.rx_ts_byte1 << 8 |
+		 meta.rx_ts_byte0;
+
+	hwts->ts.tv_sec = (rx_ts * 8) / 1000000000;
+	hwts->ts.tv_nsec = (rx_ts * 8) % 1000000000;
+#else
 	if (!ts) {
 		memset(&hwts->ts, 0, sizeof(hwts->ts));
 		return cnt;
@@ -398,6 +414,7 @@ int sk_receive(int fd, void *buf, int buflen,
 		hwts->ts = ts[1];
 		break;
 	}
+#endif
 	return cnt;
 }
 

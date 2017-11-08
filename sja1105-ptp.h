@@ -59,9 +59,9 @@ struct tc {
 
 struct meta_data {
 	char reserve;
-	char tx_ts_byte2;
-	char tx_ts_byte1;
-	char tx_ts_byte0;
+	char rx_ts_byte2;
+	char rx_ts_byte1;
+	char rx_ts_byte0;
 	char dst_mac_byte1;
 	char dst_mac_byte0;
 	char src_port;
