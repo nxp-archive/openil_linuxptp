@@ -47,6 +47,10 @@ struct host_if {
 	const char *name;
 	struct transport *trans;
 	struct fdarray fd_array;
+	struct ptp_message *last_sync;
+	struct ptp_message *last_sync_fup;
+	struct ptp_message *sync;
+	struct ptp_message *sync_fup;
 };
 
 struct tc {

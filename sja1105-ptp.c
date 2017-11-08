@@ -78,6 +78,10 @@ static int get_cfg(int argc, char *argv[], struct cfg *config)
 	return 0;
 }
 
+static void clock_frequency_sync(void)
+{
+}
+
 static void process_sync(struct ptp_message *m)
 {
 	struct tc *clock = &tc;
@@ -99,6 +103,46 @@ static void process_sync(struct ptp_message *m)
 			printf("sja1105-ptp: select master clock %s\n", cid2str(&clock->master_id));
 		}
 	}
+
+	if (clock->master_setup) {
+		msg_get(m);
+		clock->interface->sync = m;
+	}
+}
+
+static void process_sync_fup(struct ptp_message *m)
+{
+	struct tc *clock = &tc;
+
+	if (!clock->master_setup)
+		return;
+
+	if (!clock->interface->sync)
+		return;
+
+	if (clock->interface->sync->header.sequenceId !=
+					m->header.sequenceId) {
+		printf("sync_fup didn't match sync!\n");
+		msg_put(clock->interface->sync);
+		clock->interface->sync = NULL;
+		return;
+	}
+
+	msg_get(m);
+	clock->interface->sync_fup = m;
+
+	if (clock->interface->last_sync &&
+			clock->interface->last_sync_fup) {
+		clock_frequency_sync();
+
+		msg_put(clock->interface->last_sync);
+		msg_put(clock->interface->last_sync_fup);
+	}
+
+	clock->interface->last_sync = clock->interface->sync;
+	clock->interface->last_sync_fup = clock->interface->sync_fup;
+	clock->interface->sync = NULL;
+	clock->interface->sync_fup = NULL;
 }
 
 static int interface_recv(struct host_if *interface, int index)
@@ -145,6 +189,9 @@ static int interface_recv(struct host_if *interface, int index)
 		//	msg->hwts.ts.tv_sec, msg->hwts.ts.tv_nsec);
 		process_sync(msg);
 		break;
+	case FOLLOW_UP:
+		process_sync_fup(msg);
+		break;
 	}
 
 	msg_put(msg);
@@ -186,6 +233,11 @@ int main(int argc, char *argv[])
 		clock->fd[i].fd = interface->fd_array.fd[i];
 		clock->fd[i].events = POLLIN|POLLPRI;
 	}
+
+	clock->interface->sync = NULL;
+	clock->interface->sync_fup = NULL;
+	clock->interface->last_sync = NULL;
+	clock->interface->last_sync_fup = NULL;
 
 	printf("sja1105-ptp: start up sja1105-ptp. Listen to master ...\n");
 
