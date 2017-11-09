@@ -78,8 +78,67 @@ static int get_cfg(int argc, char *argv[], struct cfg *config)
 	return 0;
 }
 
+static inline void timespec_to_timestamp(struct timespec *src, struct timestamp *dst)
+{
+	dst->sec = src->tv_sec;
+	dst->nsec = src->tv_nsec;
+}
+
+static inline uint64_t timestamp_to_ns(struct timestamp ts)
+{
+	return ts.sec * NS_PER_SEC + ts.nsec;
+}
+
+#define DOUBLE_KEEP_31BIT_FRACTION_SHIFT	21
+#define UINT32_LOWER_31BIT_MASK			0x7fffffff
+#define UINT32_UPPER_1BIT_MASK			0x80000000
+
 static void clock_frequency_sync(void)
 {
+	struct tc *clock = &tc;
+	struct timestamp sync_tx = clock->interface->sync_fup->ts.pdu;
+	struct timestamp last_sync_tx = clock->interface->last_sync_fup->ts.pdu;
+	struct timestamp sync_rx, last_sync_rx;
+	uint64_t sync_tx_interval, sync_rx_interval;
+	double ratio;
+	uint32_t r;
+	double tmp;
+	uint64_t *p = (uint64_t *)(&tmp);
+
+	timespec_to_timestamp(&clock->interface->sync->hwts.ts, &sync_rx);
+	timespec_to_timestamp(&clock->interface->last_sync->hwts.ts, &last_sync_rx);
+
+	sync_tx_interval = timestamp_to_ns(sync_tx) - timestamp_to_ns(last_sync_tx);
+	sync_rx_interval = timestamp_to_ns(sync_rx) - timestamp_to_ns(last_sync_rx);
+
+	ratio = (double) sync_tx_interval / sync_rx_interval;
+	//printf("ratio %.9f\n", ratio);
+	ratio *= clock->cur_ratio;
+
+	if (ratio <= 0 || ratio >= 2) {
+		printf("ratio for frequency sync exceeded register range: %.9f", ratio);
+		return;
+	}
+
+	tmp = ratio < 1 ? ratio + 1 : ratio;
+
+	r = (*p >> DOUBLE_KEEP_31BIT_FRACTION_SHIFT) &
+		UINT32_LOWER_31BIT_MASK;
+
+	if (ratio >= 1)
+		r = r | UINT32_UPPER_1BIT_MASK;
+
+	//printf("set ratio %.9f, 0x%x, old value 0x%x\n", ratio, r, clock->cur_ratio_u32);
+	if (r == clock->cur_ratio_u32)
+		return;
+
+	if (sja1105_ptp_clk_rate_set(&spi_setup, ratio) < 0) {
+		printf("setting ratio failed: ratio 0x%x\n", r);
+		return ;
+	}
+
+	clock->cur_ratio = ratio;
+	clock->cur_ratio_u32 = r;
 }
 
 static void process_sync(struct ptp_message *m)
@@ -238,6 +297,8 @@ int main(int argc, char *argv[])
 	clock->interface->sync_fup = NULL;
 	clock->interface->last_sync = NULL;
 	clock->interface->last_sync_fup = NULL;
+	clock->cur_ratio = 1.0;
+	clock->cur_ratio_u32 = 0x80000000;
 
 	printf("sja1105-ptp: start up sja1105-ptp. Listen to master ...\n");
 

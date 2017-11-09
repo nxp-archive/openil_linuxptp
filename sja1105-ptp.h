@@ -59,6 +59,8 @@ struct tc {
 	struct ClockIdentity master_id;
 	bool master_setup;
 	int master_stable;
+	double cur_ratio;
+	uint32_t cur_ratio_u32;
 };
 
 struct meta_data {
