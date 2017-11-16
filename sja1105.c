@@ -277,7 +277,6 @@ int sja1105_sync(clockid_t clkid)
 			pr_err("sja1105_ptp_clk_add failed");
 			return -1;
 		}
-		t->reset_req = 0;
 		s->drift_sum = 0;
 	}
 
@@ -302,5 +301,6 @@ int sja1105_sync(clockid_t clkid)
 		return -1;
 	}
 
+	t->reset_req = 0;
 	return 0;
 }
