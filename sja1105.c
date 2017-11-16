@@ -286,7 +286,8 @@ int sja1105_sync(clockid_t clkid)
 	pr_debug("sja1105: offset %9lld ns, delay %9lld ns", offset, delay);
 
 	if (offset >= t->max_offset || offset <= - t->max_offset) {
-		pr_err("sja1105: offset from master exceeded max value %d ns", t->max_offset);
+		pr_err("sja1105: offset from master exceeded max value %lld ns",
+		       t->max_offset);
 
 		if (offset >= NS_PER_SEC || offset <= - NS_PER_SEC)
 			t->reset_req = 1;
