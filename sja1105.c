@@ -177,6 +177,7 @@ int sja1105_sync(clockid_t clkid)
 	struct timespec offset_ts;
 
 	if (t->reset_req) {
+		pr_err("sja1105 reset requested");
 		/* Step 1, reset sja1105 ratio */
 		t->ratio = 1.0f;
 		if (sja1105_ptp_clk_rate_set(&spi_setup, t->ratio)) {
@@ -227,8 +228,10 @@ int sja1105_sync(clockid_t clkid)
 	/* Apply adjustment to the SJA1105 clock ratio
 	 * according to the PI algorithm */
 	t->ratio = 1 + sja1105_sync_run_pi_servo(offset);
-	if (sja1105_ptp_clk_rate_set(&spi_setup, t->ratio))
+	if (sja1105_ptp_clk_rate_set(&spi_setup, t->ratio)) {
+		pr_err("sja1105: set_clock_ratio failed");
 		return -1;
+	}
 
 	return 0;
 }
