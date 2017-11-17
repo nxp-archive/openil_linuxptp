@@ -20,7 +20,9 @@
 #include <fcntl.h>
 #include <linux/filter.h>
 #include <linux/if_ether.h>
+#if defined(__UCLIBC__) || defined(__GLIBC__)
 #include <net/ethernet.h>
+#endif
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netpacket/packet.h>

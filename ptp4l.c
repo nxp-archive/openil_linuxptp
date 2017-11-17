@@ -250,6 +250,11 @@ int main(int argc, char *argv[])
 		if (clock_poll(clock))
 			break;
 	}
+
+#ifdef SJA1105_SYNC
+	sja1105_sync_timer_destroy();
+#endif
+
 out:
 	if (clock)
 		clock_destroy(clock);

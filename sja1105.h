@@ -24,12 +24,10 @@
 
 #include "config.h"
 
-struct sja1105_sync_timer {
-	int fd;
-	int valid;
-	int max_offset;
-	int reset_req;
-	double ratio;
+enum qbv_state {
+	QBV_STATE_DISABLED,
+	QBV_STATE_ENABLED_NOT_RUNNING,
+	QBV_STATE_RUNNING,
 };
 
 struct sja1105_sync_pi_servo {
@@ -38,12 +36,24 @@ struct sja1105_sync_pi_servo {
 	int64_t drift_sum;
 };
 
-struct sja1105_sync_timer sja1105_sync_t;
-struct sja1105_sync_pi_servo sja1105_sync_pi_s;
+struct sja1105_sync_timer {
+	int     fd;
+	int     valid;
+	int64_t max_offset;
+	int     reset_req;
+	double  ratio;
+	int     have_qbv;
+	enum    qbv_state qbv_state;
+	struct  timespec qbv_cycle_len;
+	struct  timespec qbv_start_time;
+	struct  sja1105_sync_pi_servo sync_pi_s;
+};
 
+int sja1105_sync_timer_is_valid();
 int sja1105_sync_timer_create(struct config *config);
 void sja1105_sync_fill_pollfd(struct pollfd *dest);
 int sja1105_sync_timer_settime(void);
 int sja1105_sync(clockid_t clkid);
+void sja1105_sync_timer_destroy();
 
 #endif
