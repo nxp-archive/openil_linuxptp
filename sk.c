@@ -293,6 +293,12 @@ int sk_receive(int fd, void *buf, int buflen,
 	struct sja1105_mgmt_entry sja1105_mgmt;
 	struct timespec ts;
 	uint64_t rx_ts;
+
+	if (sja1105_ptp_clk_get(&spi_setup, &ts)) {
+		printf("failed to get sja1105 clock for rx timestamp!\n");
+		return -1;
+	}
+
 #else
 	char control[256];
 	int cnt = 0, res = 0, level, type;
@@ -383,11 +389,6 @@ int sk_receive(int fd, void *buf, int buflen,
 		addr->len = msg.msg_namelen;
 
 #ifdef SJA1105_TC
-	if (sja1105_ptp_clk_get(&spi_setup, &ts)) {
-		printf("failed to get sja1105 clock for rx timestamp!\n");
-		return -1;
-	}
-
 	rx_ts = (ts.tv_sec *NS_PER_SEC + ts.tv_nsec) / 8;
 	rx_ts &= ~0xffffff;
 	rx_ts |= meta.rx_ts_byte2 << 16 |
