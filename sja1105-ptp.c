@@ -35,6 +35,9 @@ struct tc	tc;
 struct cfg	tc_cfg;
 struct host_if	tc_host_if;
 
+struct sja1105_egress_ts	sync_tx_ts;
+struct sja1105_egress_ts	egress_ts_tmp;
+
 struct sja1105_spi_setup spi_setup = {
 	.device    = "/dev/spidev0.1",
 	.mode      = SPI_CPHA,
@@ -166,6 +169,16 @@ static void process_sync(struct ptp_message *m)
 	if (clock->master_setup) {
 		msg_get(m);
 		clock->interface->sync = m;
+
+		memset(&sync_tx_ts, 0, sizeof(struct sja1105_egress_ts));
+		if (egress_ts_tmp.available)
+			memcpy(&sync_tx_ts, &egress_ts_tmp, sizeof(struct sja1105_egress_ts));
+
+		//calculate correction field for follow_up and store in sync_tx_ts
+		if (sync_tx_ts.tx_ts) {
+			sync_tx_ts.tx_ts -= timespec_to_tmv(m->hwts.ts);
+			sync_tx_ts.tx_ts <<= 16;
+		}
 	}
 }
 

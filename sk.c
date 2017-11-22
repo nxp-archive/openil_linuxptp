@@ -275,6 +275,27 @@ static int sk_receive_meta(int fd, struct address *addr, struct meta_data *meta)
 */
 	return 0;
 }
+
+void ptp_insert_correction(struct ptp_message *m)
+{
+	struct tc *clock = &tc;
+
+	switch (m->header.tsmt & 0x0f) {
+	case FOLLOW_UP:
+		if (!clock->master_setup)
+			return;
+
+		if (!clock->interface->sync)
+			return;
+
+		if (clock->interface->sync->header.sequenceId ==
+					ntohs(m->header.sequenceId)) {
+			m->header.correction = sync_tx_ts.tx_ts;
+			m->header.correction = host2net64(m->header.correction);
+		}
+		break;
+	}
+}
 #endif
 
 int sk_receive(int fd, void *buf, int buflen,
@@ -291,7 +312,7 @@ int sk_receive(int fd, void *buf, int buflen,
 	struct ptp_message *ptp_msg;
 	int cnt_send;
 	struct sja1105_mgmt_entry sja1105_mgmt;
-	struct timespec ts;
+	struct timespec ts, tx_ts;
 	uint64_t rx_ts;
 
 	if (sja1105_ptp_clk_get(&spi_setup, &ts)) {
@@ -347,11 +368,15 @@ int sk_receive(int fd, void *buf, int buflen,
 			sja1105_mgmt.destports = SJA1105_PORT & ~SJA1105_PORT_HOST &
 						    ~(1 << meta.src_port);
 			sja1105_mgmt.macaddr = PTP_E2E_ETH_MULTI_ADDR;
+			sja1105_mgmt.ts_regid = 0;
+			sja1105_mgmt.egr_ts = 1;
 
 			if (sja1105_mgmt_route_set(&spi_setup, &sja1105_mgmt, 0))
 				return -1;
 
 			ptp_msg = buf + sizeof(struct eth_hdr);
+
+			ptp_insert_correction(ptp_msg);
 
 			cnt_send = send(fd, buf, sizeof(struct eth_hdr) +
 				ntohs(ptp_msg->header.messageLength), 0);
@@ -359,6 +384,16 @@ int sk_receive(int fd, void *buf, int buflen,
 				printf("failed to forward message!\n");
 				return -1;
 			}
+
+			memset(&egress_ts_tmp, 0, sizeof(egress_ts_tmp));
+
+			if (!sja1105_ptpegr_ts_poll(&spi_setup,
+					sja1105_mgmt.destports & 0x1 ? 0 : 1,
+					0, &tx_ts)) {
+				egress_ts_tmp.tx_ts = tx_ts.tv_sec * NS_PER_SEC + tx_ts.tv_nsec;
+				egress_ts_tmp.available = 1;
+			} else
+				printf("no updated tx timestamp!\n");
 		}
 	}
 #endif

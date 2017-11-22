@@ -74,10 +74,19 @@ struct meta_data {
 	char switch_id;
 };
 
+struct sja1105_egress_ts {
+	//assume frames are forwarded out on each port at same time
+	uint64_t tx_ts;
+	uint8_t ts_index;
+	uint8_t available;
+};
+
 extern struct tc	tc;
 extern struct cfg	tc_cfg;
 extern struct host_if	tc_host_if;
 
 extern struct sja1105_spi_setup		spi_setup;
+extern struct sja1105_egress_ts		sync_tx_ts;
+extern struct sja1105_egress_ts		egress_ts_tmp;
 
 #endif
