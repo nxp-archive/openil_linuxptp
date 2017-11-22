@@ -387,6 +387,7 @@ int sk_receive(int fd, void *buf, int buflen,
 			if (sk_receive_meta(interface->fd_array.fd[FD_META], addr, &meta))
 				return -1;
 
+			memset(&sja1105_mgmt, 0, sizeof(sja1105_mgmt));
 			sja1105_mgmt.destports = SJA1105_PORT & ~SJA1105_PORT_HOST &
 						    ~(1 << meta.src_port);
 			sja1105_mgmt.macaddr = PTP_E2E_ETH_MULTI_ADDR;
