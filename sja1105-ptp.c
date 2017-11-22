@@ -36,6 +36,7 @@ struct cfg	tc_cfg;
 struct host_if	tc_host_if;
 
 struct sja1105_egress_ts	sync_tx_ts;
+struct sja1105_egress_ts	delay_req_tx_ts;
 struct sja1105_egress_ts	egress_ts_tmp;
 
 struct sja1105_spi_setup spi_setup = {
@@ -217,6 +218,27 @@ static void process_sync_fup(struct ptp_message *m)
 	clock->interface->sync_fup = NULL;
 }
 
+static void process_delay_req(struct ptp_message *m)
+{
+	struct tc *clock = &tc;
+
+	if (clock->interface->delay_req)
+		msg_put(clock->interface->delay_req);
+
+	msg_get(m);
+	clock->interface->delay_req = m;
+
+	memset(&delay_req_tx_ts, 0, sizeof(struct sja1105_egress_ts));
+	if (egress_ts_tmp.available)
+		memcpy(&delay_req_tx_ts, &egress_ts_tmp, sizeof(struct sja1105_egress_ts));
+
+	//calculate correction field for delay_resp and store in delay_req_tx_ts
+	if (delay_req_tx_ts.tx_ts) {
+		delay_req_tx_ts.tx_ts -= timespec_to_tmv(m->hwts.ts);
+		delay_req_tx_ts.tx_ts <<= 16;
+	}
+}
+
 static int interface_recv(struct host_if *interface, int index)
 {
 	struct ptp_message *msg;
@@ -264,6 +286,9 @@ static int interface_recv(struct host_if *interface, int index)
 	case FOLLOW_UP:
 		process_sync_fup(msg);
 		break;
+	case DELAY_REQ:
+		process_delay_req(msg);
+		break;
 	}
 
 	msg_put(msg);
@@ -310,6 +335,7 @@ int main(int argc, char *argv[])
 	clock->interface->sync_fup = NULL;
 	clock->interface->last_sync = NULL;
 	clock->interface->last_sync_fup = NULL;
+	clock->interface->delay_req = NULL;
 	clock->cur_ratio = 1.0;
 	clock->cur_ratio_u32 = 0x80000000;
 

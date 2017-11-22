@@ -51,6 +51,7 @@ struct host_if {
 	struct ptp_message *last_sync_fup;
 	struct ptp_message *sync;
 	struct ptp_message *sync_fup;
+	struct ptp_message *delay_req;
 };
 
 struct tc {
@@ -87,6 +88,7 @@ extern struct host_if	tc_host_if;
 
 extern struct sja1105_spi_setup		spi_setup;
 extern struct sja1105_egress_ts		sync_tx_ts;
+extern struct sja1105_egress_ts		delay_req_tx_ts;
 extern struct sja1105_egress_ts		egress_ts_tmp;
 
 #endif

@@ -279,12 +279,15 @@ static int sk_receive_meta(int fd, struct address *addr, struct meta_data *meta)
 void ptp_insert_correction(struct ptp_message *m)
 {
 	struct tc *clock = &tc;
+	struct delay_req_msg *req;
+	struct delay_resp_msg *rsp;
+	struct delay_resp_msg rsp_tmp;
 
-	switch (m->header.tsmt & 0x0f) {
+	if (!clock->master_setup)
+		return;
+
+	switch (msg_type(m)) {
 	case FOLLOW_UP:
-		if (!clock->master_setup)
-			return;
-
 		if (!clock->interface->sync)
 			return;
 
@@ -293,6 +296,25 @@ void ptp_insert_correction(struct ptp_message *m)
 			m->header.correction = sync_tx_ts.tx_ts;
 			m->header.correction = host2net64(m->header.correction);
 		}
+		break;
+	case DELAY_RESP:
+		if (!clock->interface->delay_req)
+			return;
+
+		req = &clock->interface->delay_req->delay_req;
+
+		rsp = &m->delay_resp;
+		memcpy(&rsp_tmp, rsp, sizeof(struct delay_resp_msg));
+		rsp_tmp.requestingPortIdentity.portNumber = ntohs(rsp_tmp.requestingPortIdentity.portNumber);
+
+		if (memcmp(&rsp_tmp.requestingPortIdentity, &req->hdr.sourcePortIdentity,
+				sizeof(rsp_tmp.requestingPortIdentity)))
+			return;
+		if (ntohs(rsp_tmp.hdr.sequenceId) != req->hdr.sequenceId)
+			return;
+
+		m->header.correction = delay_req_tx_ts.tx_ts;
+		m->header.correction = host2net64(m->header.correction);
 		break;
 	}
 }
