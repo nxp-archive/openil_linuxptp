@@ -410,7 +410,7 @@ int sk_receive(int fd, void *buf, int buflen,
 
 			memset(&egress_ts_tmp, 0, sizeof(egress_ts_tmp));
 
-			if (!sja1105_ptpegr_ts_poll(&spi_setup,
+			if (!sja1105_ptpegr_ts_poll(&spi_setup, TS_PTPCLK,
 					sja1105_mgmt.destports & 0x1 ? 0 : 1,
 					0, &tx_ts)) {
 				egress_ts_tmp.tx_ts = tx_ts.tv_sec * NS_PER_SEC + tx_ts.tv_nsec;
