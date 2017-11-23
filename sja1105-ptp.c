@@ -52,6 +52,7 @@ struct sja1105_spi_setup spi_setup = {
 static void usage(void)
 {
 	printf("\nusage: sja1105-ptp [options]\n\n \
+		This stack only support IEEE 1588 2-step E2E transparent clock now.\n\n \
 		Network Interface\n \
 		-i [name]   host interface name\n\n \
 		-h          help\n \
@@ -116,7 +117,9 @@ static void clock_frequency_sync(void)
 	sync_rx_interval = timestamp_to_ns(sync_rx) - timestamp_to_ns(last_sync_rx);
 
 	ratio = (double) sync_tx_interval / sync_rx_interval;
-	//printf("ratio %.9f\n", ratio);
+
+	printf("syntonizaiton result: sja1105_freq / master_freq = %.9f\n", ratio);
+
 	ratio *= clock->cur_ratio;
 
 	if (ratio <= 0 || ratio >= 2) {
