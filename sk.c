@@ -35,9 +35,16 @@
 #include "missing.h"
 #include "print.h"
 #include "sk.h"
+#ifdef SJA1105_TC
+#include "sja1105-ptp.h"
+#include "msg.h"
+#endif
 
 /* globals */
 
+#ifdef SJA1105_TC
+int sk_meta_timeout = 1;
+#endif
 int sk_tx_timeout = 1;
 int sk_check_fupsync;
 
@@ -224,15 +231,125 @@ int sk_interface_addr(const char *name, int family, struct address *addr)
 static short sk_events = POLLPRI;
 static short sk_revents = POLLPRI;
 
+#ifdef SJA1105_TC
+static int sk_receive_meta(int fd, struct address *addr, struct meta_data *meta)
+{
+	char data[sizeof(struct eth_hdr) + 8];
+	char control[256];
+	struct msghdr msg;
+	struct iovec iov = { data, sizeof(data) };
+	struct pollfd fd_meta = { fd, POLLIN|POLLPRI, 0 };
+	int cnt, res;
+
+	memset(control, 0, sizeof(control));
+	memset(&msg, 0, sizeof(msg));
+
+	if (addr) {
+		msg.msg_name = &addr->ss;
+		msg.msg_namelen = sizeof(addr->ss);
+	}
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = control;
+
+	res = poll(&fd_meta, 1, sk_meta_timeout);
+	if (res <= 0) {
+		printf("failed to poll fd_meta, or time out\n");
+		return -1;
+	}
+
+	cnt = recvmsg(fd, &msg, 0);
+	if (cnt < 1) {
+		printf("failed to receive meta frame!\n");
+		return -1;
+	}
+
+	memcpy(meta, &data[sizeof(struct eth_hdr)], sizeof(struct meta_data));
+
+/*
+	printf("receive meta frame:");
+	int i;
+	for (i = 0; i < 8; i++)
+		printf("%x ", data[sizeof(struct eth_hdr) + i]);
+	printf("\n");
+*/
+	return 0;
+}
+
+void ptp_insert_correction(struct ptp_message *m)
+{
+	struct tc *clock = &tc;
+	struct delay_req_msg *req;
+	struct delay_resp_msg *rsp;
+	struct delay_resp_msg rsp_tmp;
+
+	if (!clock->master_setup)
+		return;
+
+	switch (msg_type(m)) {
+	case FOLLOW_UP:
+		if (!clock->interface->sync)
+			return;
+
+		if (clock->interface->sync->header.sequenceId ==
+					ntohs(m->header.sequenceId)) {
+			m->header.correction = sync_tx_ts.tx_ts;
+			m->header.correction = host2net64(m->header.correction);
+		}
+		break;
+	case DELAY_RESP:
+		if (!clock->interface->delay_req)
+			return;
+
+		req = &clock->interface->delay_req->delay_req;
+
+		rsp = &m->delay_resp;
+		memcpy(&rsp_tmp, rsp, sizeof(struct delay_resp_msg));
+		rsp_tmp.requestingPortIdentity.portNumber = ntohs(rsp_tmp.requestingPortIdentity.portNumber);
+
+		if (memcmp(&rsp_tmp.requestingPortIdentity, &req->hdr.sourcePortIdentity,
+				sizeof(rsp_tmp.requestingPortIdentity)))
+			return;
+		if (ntohs(rsp_tmp.hdr.sequenceId) != req->hdr.sequenceId)
+			return;
+
+		m->header.correction = delay_req_tx_ts.tx_ts;
+		m->header.correction = host2net64(m->header.correction);
+		break;
+	}
+}
+#endif
+
 int sk_receive(int fd, void *buf, int buflen,
 	       struct address *addr, struct hw_timestamp *hwts, int flags)
 {
+#ifdef SJA1105_TC
+	char control[256];
+	int cnt = 0, res = 0;
+	struct iovec iov = { buf, buflen };
+	struct msghdr msg;
+
+	struct host_if *interface = &tc_host_if;
+	struct meta_data meta;
+	struct ptp_message *ptp_msg;
+	int cnt_send;
+	struct sja1105_mgmt_entry sja1105_mgmt;
+	struct timespec ts, tx_ts;
+	uint64_t rx_ts;
+
+	if (sja1105_ptp_clk_get(&spi_setup, &ts)) {
+		printf("failed to get sja1105 clock for rx timestamp!\n");
+		return -1;
+	}
+
+#else
 	char control[256];
 	int cnt = 0, res = 0, level, type;
 	struct cmsghdr *cm;
 	struct iovec iov = { buf, buflen };
 	struct msghdr msg;
 	struct timespec *sw, *ts = NULL;
+#endif
 
 	memset(control, 0, sizeof(control));
 	memset(&msg, 0, sizeof(msg));
@@ -264,7 +381,47 @@ int sk_receive(int fd, void *buf, int buflen,
 	if (cnt < 1)
 		pr_err("recvmsg%sfailed: %m",
 		       flags == MSG_ERRQUEUE ? " tx timestamp " : " ");
+#ifdef SJA1105_TC
+	else {
+		if (flags != MSG_ERRQUEUE) {
+			if (sk_receive_meta(interface->fd_array.fd[FD_META], addr, &meta))
+				return -1;
 
+			memset(&sja1105_mgmt, 0, sizeof(sja1105_mgmt));
+			sja1105_mgmt.destports = SJA1105_PORT & ~SJA1105_PORT_HOST &
+						    ~(1 << meta.src_port);
+			sja1105_mgmt.macaddr = PTP_E2E_ETH_MULTI_ADDR;
+			sja1105_mgmt.ts_regid = 0;
+			sja1105_mgmt.egr_ts = 1;
+
+			if (sja1105_mgmt_route_set(&spi_setup, &sja1105_mgmt, 0))
+				return -1;
+
+			ptp_msg = buf + sizeof(struct eth_hdr);
+
+			ptp_insert_correction(ptp_msg);
+
+			cnt_send = send(fd, buf, sizeof(struct eth_hdr) +
+				ntohs(ptp_msg->header.messageLength), 0);
+			if (cnt_send < 1) {
+				printf("failed to forward message!\n");
+				return -1;
+			}
+
+			memset(&egress_ts_tmp, 0, sizeof(egress_ts_tmp));
+
+			if (!sja1105_ptpegr_ts_poll(&spi_setup,
+					sja1105_mgmt.destports & 0x1 ? 0 : 1,
+					0, &tx_ts)) {
+				egress_ts_tmp.tx_ts = tx_ts.tv_sec * NS_PER_SEC + tx_ts.tv_nsec;
+				egress_ts_tmp.available = 1;
+			} else
+				printf("no updated tx timestamp!\n");
+		}
+	}
+#endif
+
+#ifndef SJA1105_TC
 	for (cm = CMSG_FIRSTHDR(&msg); cm != NULL; cm = CMSG_NXTHDR(&msg, cm)) {
 		level = cm->cmsg_level;
 		type  = cm->cmsg_type;
@@ -284,10 +441,21 @@ int sk_receive(int fd, void *buf, int buflen,
 			hwts->sw = *sw;
 		}
 	}
+#endif
 
 	if (addr)
 		addr->len = msg.msg_namelen;
 
+#ifdef SJA1105_TC
+	rx_ts = (ts.tv_sec *NS_PER_SEC + ts.tv_nsec) / 8;
+	rx_ts &= ~0xffffff;
+	rx_ts |= meta.rx_ts_byte2 << 16 |
+		 meta.rx_ts_byte1 << 8 |
+		 meta.rx_ts_byte0;
+
+	hwts->ts.tv_sec = (rx_ts * 8) / 1000000000;
+	hwts->ts.tv_nsec = (rx_ts * 8) % 1000000000;
+#else
 	if (!ts) {
 		memset(&hwts->ts, 0, sizeof(hwts->ts));
 		return cnt;
@@ -305,6 +473,7 @@ int sk_receive(int fd, void *buf, int buflen,
 		hwts->ts = ts[1];
 		break;
 	}
+#endif
 	return cnt;
 }
 

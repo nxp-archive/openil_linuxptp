@@ -21,6 +21,9 @@
 #define HAVE_TRANSPORT_PRIVATE_H
 
 #include <time.h>
+#ifdef SJA1105_TC
+#include <stdbool.h>
+#endif
 
 #include "address.h"
 #include "fd.h"
@@ -29,6 +32,9 @@
 struct transport {
 	enum transport_type type;
 	struct config *cfg;
+#ifdef SJA1105_TC
+	bool is_sja1105;
+#endif
 
 	int (*close)(struct transport *t, struct fdarray *fda);
 
