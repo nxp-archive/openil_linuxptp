@@ -318,6 +318,11 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
+	if (sja1105_ptp_corrclk4ts_set(&spi_setup, TS_PTPCLK)) {
+		printf("sja1105: ptp_corrclk4ts_set failed\n");
+		return -1;
+	}
+
 	interface->name = config->if_name;
 	interface->trans = raw_transport_create();
 	interface->trans->is_sja1105 = true;
