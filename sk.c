@@ -345,6 +345,7 @@ int sk_receive(int fd, void *buf, int buflen,
 	struct sja1105_mgmt_entry sja1105_mgmt;
 	struct timespec ts, tx_ts;
 	uint64_t rx_ts;
+	uint64_t rx_ts_tmp;
 
 	if (sja1105_ptp_clk_get(&spi_setup, &ts)) {
 		printf("failed to get sja1105 clock for rx timestamp!\n");
@@ -457,10 +458,14 @@ int sk_receive(int fd, void *buf, int buflen,
 
 #ifdef SJA1105_TC
 	rx_ts = (ts.tv_sec *NS_PER_SEC + ts.tv_nsec) / 8;
+	rx_ts_tmp = rx_ts;
 	rx_ts &= ~0xffffff;
 	rx_ts |= meta.rx_ts_byte2 << 16 |
 		 meta.rx_ts_byte1 << 8 |
 		 meta.rx_ts_byte0;
+
+	if (rx_ts_tmp <= rx_ts)
+		rx_ts -= 0x1000000;
 
 	hwts->ts.tv_sec = (rx_ts * 8) / 1000000000;
 	hwts->ts.tv_nsec = (rx_ts * 8) % 1000000000;
