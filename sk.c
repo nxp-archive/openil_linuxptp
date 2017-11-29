@@ -288,18 +288,23 @@ void ptp_insert_correction(struct ptp_message *m)
 
 	switch (msg_type(m)) {
 	case FOLLOW_UP:
-		if (!clock->interface->sync)
+		if (!clock->interface->sync) {
+			printf("follow_up: didn't have a sync msg stored!\n");
 			return;
+		}
 
 		if (clock->interface->sync->header.sequenceId ==
 					ntohs(m->header.sequenceId)) {
 			m->header.correction = sync_tx_ts.tx_ts;
 			m->header.correction = host2net64(m->header.correction);
-		}
+		} else
+			printf("follow_up: didn't match with sync msg stored!\n");
 		break;
 	case DELAY_RESP:
-		if (!clock->interface->delay_req)
+		if (!clock->interface->delay_req) {
+			printf("delay_resp: didn't have a delay_req msg stored!\n");
 			return;
+		}
 
 		req = &clock->interface->delay_req->delay_req;
 
@@ -308,10 +313,14 @@ void ptp_insert_correction(struct ptp_message *m)
 		rsp_tmp.requestingPortIdentity.portNumber = ntohs(rsp_tmp.requestingPortIdentity.portNumber);
 
 		if (memcmp(&rsp_tmp.requestingPortIdentity, &req->hdr.sourcePortIdentity,
-				sizeof(rsp_tmp.requestingPortIdentity)))
+				sizeof(rsp_tmp.requestingPortIdentity))) {
+			printf("delay_resp: port id didn't match with delay_req\n");
 			return;
-		if (ntohs(rsp_tmp.hdr.sequenceId) != req->hdr.sequenceId)
+		}
+		if (ntohs(rsp_tmp.hdr.sequenceId) != req->hdr.sequenceId) {
+			printf("delay_resp: seq id didn't match with delay_req\n");
 			return;
+		}
 
 		m->header.correction = delay_req_tx_ts.tx_ts;
 		m->header.correction = host2net64(m->header.correction);
@@ -336,6 +345,7 @@ int sk_receive(int fd, void *buf, int buflen,
 	struct sja1105_mgmt_entry sja1105_mgmt;
 	struct timespec ts, tx_ts;
 	uint64_t rx_ts;
+	uint64_t rx_ts_tmp;
 
 	if (sja1105_ptp_clk_get(&spi_setup, &ts)) {
 		printf("failed to get sja1105 clock for rx timestamp!\n");
@@ -448,10 +458,14 @@ int sk_receive(int fd, void *buf, int buflen,
 
 #ifdef SJA1105_TC
 	rx_ts = (ts.tv_sec *NS_PER_SEC + ts.tv_nsec) / 8;
+	rx_ts_tmp = rx_ts;
 	rx_ts &= ~0xffffff;
 	rx_ts |= meta.rx_ts_byte2 << 16 |
 		 meta.rx_ts_byte1 << 8 |
 		 meta.rx_ts_byte0;
+
+	if (rx_ts_tmp <= rx_ts)
+		rx_ts -= 0x1000000;
 
 	hwts->ts.tv_sec = (rx_ts * 8) / 1000000000;
 	hwts->ts.tv_nsec = (rx_ts * 8) % 1000000000;
