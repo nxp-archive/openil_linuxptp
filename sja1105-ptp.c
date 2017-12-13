@@ -98,6 +98,9 @@ static inline uint64_t timestamp_to_ns(struct timestamp ts)
 #define UINT32_LOWER_31BIT_MASK			0x7fffffff
 #define UINT32_UPPER_1BIT_MASK			0x80000000
 
+#define MAX_FREQ_OFFSET				0.0000001
+#define MAX_SYNT_EXCEPTION_CNT			3
+
 static void clock_frequency_sync(void)
 {
 	struct tc *clock = &tc;
@@ -117,6 +120,19 @@ static void clock_frequency_sync(void)
 	sync_rx_interval = timestamp_to_ns(sync_rx) - timestamp_to_ns(last_sync_rx);
 
 	ratio = (double) sync_tx_interval / sync_rx_interval;
+
+	if (ratio > 1 + MAX_FREQ_OFFSET || ratio < 1 - MAX_FREQ_OFFSET)
+		clock->synt_exception ++;
+	else
+		clock->synt_exception = 0;
+
+	if (clock->synt_exception > MAX_SYNT_EXCEPTION_CNT)
+		clock->synt_exception = 0;
+
+	if (clock->synt_exception) {
+		printf("ignore exception: (sja1105 freq) / (master freq) is %.9f\n", ratio);
+		return;
+	}
 
 	printf("syntonizaiton result: sja1105_freq / master_freq = %.9f\n", ratio);
 
@@ -210,6 +226,14 @@ static void process_sync_fup(struct ptp_message *m)
 	if (clock->interface->last_sync &&
 			clock->interface->last_sync_fup) {
 		clock_frequency_sync();
+
+		if (clock->synt_exception) {
+			msg_put(clock->interface->sync);
+			msg_put(clock->interface->sync_fup);
+			clock->interface->sync = NULL;
+			clock->interface->sync_fup = NULL;
+			return;
+		}
 
 		msg_put(clock->interface->last_sync);
 		msg_put(clock->interface->last_sync_fup);
