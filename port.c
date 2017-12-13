@@ -1670,6 +1670,7 @@ static void process_delay_resp(struct port *p, struct ptp_message *m)
 	if (!pid_eq(&master, &m->header.sourcePortIdentity))
 		return;
 
+	pr_debug("Received Delay_Resp: correction %lld ns", correction_to_tmv(m->header.correction));
 	c3 = correction_to_tmv(m->header.correction);
 	t3 = timespec_to_tmv(p->delay_req->hwts.ts);
 	t4 = timestamp_to_tmv(m->ts.pdu);
@@ -1730,6 +1731,7 @@ static void process_follow_up(struct port *p, struct ptp_message *m)
 	} else {
 		event = FUP_MISMATCH;
 	}
+	pr_debug("Received Follow_Up: correction %lld ns", correction_to_tmv(m->header.correction));
 	port_syfufsm(p, event, m);
 }
 
@@ -1988,6 +1990,7 @@ static void process_sync(struct port *p, struct ptp_message *m)
 		clock_sync_interval(p->clock, p->log_sync_interval);
 	}
 
+	pr_debug("Received Sync: correction %lld ns", correction_to_tmv(m->header.correction));
 	m->header.correction += p->asymmetry;
 
 	if (one_step(m)) {
