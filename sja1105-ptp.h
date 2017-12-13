@@ -62,6 +62,7 @@ struct tc {
 	int master_stable;
 	double cur_ratio;
 	uint32_t cur_ratio_u32;
+	int synt_exception;
 };
 
 struct meta_data {
