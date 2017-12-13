@@ -1902,6 +1902,7 @@ void process_delay_resp(struct port *p, struct ptp_message *m)
 		return;
 	}
 
+	pr_debug("Received Delay_Resp: correction %"PRId64" ns", correction_to_tmv(m->header.correction).ns);
 	c3 = correction_to_tmv(m->header.correction);
 	t3 = req->hwts.ts;
 	t4 = timestamp_to_tmv(m->ts.pdu);
@@ -1966,6 +1967,7 @@ void process_follow_up(struct port *p, struct ptp_message *m)
 	} else {
 		event = FUP_MISMATCH;
 	}
+	pr_debug("Received Follow_Up: correction %"PRId64" ns", correction_to_tmv(m->header.correction).ns);
 	port_syfufsm(p, event, m);
 }
 
@@ -2263,6 +2265,7 @@ void process_sync(struct port *p, struct ptp_message *m)
 		clock_sync_interval(p->clock, p->log_sync_interval);
 	}
 
+	pr_debug("Received Sync: correction %"PRId64" ns", correction_to_tmv(m->header.correction).ns);
 	m->header.correction += p->asymmetry;
 
 	if (one_step(m)) {
