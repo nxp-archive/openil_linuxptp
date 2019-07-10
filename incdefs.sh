@@ -28,6 +28,9 @@ user_flags()
 
 	# Get list of directories searched for header files.
 	dirs=$(echo "" | ${CROSS_COMPILE}cpp -Wp,-v 2>&1 >/dev/null | grep ^" /")
+	if [ ${PKG_CONFIG_SYSROOT_DIR} ]; then
+		dirs="${dirs} ${PKG_CONFIG_SYSROOT_DIR}/usr/include"
+	fi
 
 	# Look for clock_adjtime().
 	for d in $dirs; do
