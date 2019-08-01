@@ -40,6 +40,7 @@ enum clock_type {
 	CLOCK_TYPE_P2P        = 0x2000,
 	CLOCK_TYPE_E2E        = 0x1000,
 	CLOCK_TYPE_MANAGEMENT = 0x0800,
+	CLOCK_TYPE_BRIDGE     = 0x0400,
 };
 
 /**
