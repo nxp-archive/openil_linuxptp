@@ -235,6 +235,67 @@ static void tc_complete_syfup(struct port *q, struct port *p,
 	tc_recycle(txd);
 }
 
+static void tc_complete_folup_tlv(struct port *q, struct port *p,
+				  struct ptp_message *msg, int cnt,
+				  tmv_t residence)
+{
+	enum tc_match type = TC_MISMATCH;
+	struct ptp_message *fup;
+	struct tc_txd *txd;
+	Integer64 c1, c2;
+	int count;
+
+	TAILQ_FOREACH(txd, &p->tc_transmitted, list) {
+		type = tc_match_syfup(portnum(q), msg, txd);
+		switch (type) {
+		case TC_MISMATCH:
+			break;
+		case TC_SYNC_FUP:
+			fup = msg;
+			residence = txd->residence;
+			break;
+		case TC_FUP_SYNC:
+			fup = txd->msg;
+			break;
+		case TC_DELAY_REQRESP:
+			pr_err("tc: unexpected match of delay request - sync!");
+			return;
+		}
+		if (type != TC_MISMATCH) {
+			break;
+		}
+	}
+
+	if (type == TC_MISMATCH) {
+		txd = tc_allocate();
+		if (!txd) {
+			port_dispatch(p, EV_FAULT_DETECTED, 0);
+			return;
+		}
+		msg_get(msg);
+		txd->msg = msg;
+		txd->residence = residence;
+		txd->ingress_port = portnum(q);
+		TAILQ_INSERT_TAIL(&p->tc_transmitted, txd, list);
+		return;
+	}
+
+	c1 = net2host64(fup->header.correction);
+	c2 = c1 + tmv_to_TimeInterval(residence);
+	c2 += tmv_to_TimeInterval(q->peer_delay);
+	c2 += q->asymmetry;
+	fup->header.correction = host2net64(c2);
+	count = transport_send(p->trp, &p->fda, TRANS_GENERAL, fup);
+	if (count <= 0) {
+		pr_err("tc failed to forward follow up on port %d", portnum(p));
+		port_dispatch(p, EV_FAULT_DETECTED, 0);
+	}
+	/* Restore original correction value for next egress port. */
+	fup->header.correction = host2net64(c1);
+	TAILQ_REMOVE(&p->tc_transmitted, txd, list);
+	msg_put(txd->msg);
+	tc_recycle(txd);
+}
 static void tc_complete(struct port *q, struct port *p,
 			struct ptp_message *msg, tmv_t residence)
 {
@@ -416,6 +477,21 @@ int tc_fwd_folup(struct port *q, struct ptp_message *msg)
 			continue;
 		}
 		tc_complete(q, p, msg, tmv_zero());
+	}
+	return 0;
+}
+
+int tc_fwd_folup_tlv(struct port *q, struct ptp_message *msg, int cnt)
+{
+	struct port *p;
+
+	clock_gettime(CLOCK_MONOTONIC, &msg->ts.host);
+
+	for (p = clock_first_port(q->clock); p; p = LIST_NEXT(p, list)) {
+		if (tc_blocked(q, p, msg)) {
+			continue;
+		}
+		tc_complete_folup_tlv(q, p, msg, cnt, tmv_zero());
 	}
 	return 0;
 }

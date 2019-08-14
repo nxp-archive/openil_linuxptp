@@ -191,7 +191,7 @@ enum fsm_event bridge_event(struct port *p, int fd_index)
 		}
 		break;
 	case FOLLOW_UP:
-		if (tc_fwd_folup(p, msg)) {
+		if (tc_fwd_folup_tlv(p, msg, cnt)) {
 			event = EV_FAULT_DETECTED;
 			break;
 		}
