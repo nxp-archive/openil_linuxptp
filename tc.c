@@ -235,15 +235,34 @@ static void tc_complete_syfup(struct port *q, struct port *p,
 	tc_recycle(txd);
 }
 
+static void tc_send_folup_tlv(struct port *q, struct port *p,
+			      struct ptp_message *fup, int cnt,
+			      tmv_t residence)
+{
+	Integer64 c1, c2;
+	int count;
+
+	c1 = net2host64(fup->header.correction);
+	c2 = c1 + tmv_to_TimeInterval(residence);
+	c2 += tmv_to_TimeInterval(q->peer_delay);
+	c2 += q->asymmetry;
+	fup->header.correction = host2net64(c2);
+	count = transport_send(p->trp, &p->fda, TRANS_GENERAL, fup);
+	if (count <= 0) {
+		pr_err("tc failed to forward follow up on port %d", portnum(p));
+		port_dispatch(p, EV_FAULT_DETECTED, 0);
+	}
+	/* Restore original correction value for next egress port. */
+	fup->header.correction = host2net64(c1);
+}
+
 static void tc_complete_folup_tlv(struct port *q, struct port *p,
 				  struct ptp_message *msg, int cnt)
 {
 	enum tc_match type = TC_MISMATCH;
 	struct ptp_message *fup;
 	struct tc_txd *txd;
-	Integer64 c1, c2;
 	tmv_t residence;
-	int count;
 
 	TAILQ_FOREACH(txd, &p->tc_transmitted, list) {
 		type = tc_match_syfup(portnum(q), msg, txd);
@@ -277,22 +296,13 @@ static void tc_complete_folup_tlv(struct port *q, struct port *p,
 		return;
 	}
 
-	c1 = net2host64(fup->header.correction);
-	c2 = c1 + tmv_to_TimeInterval(residence);
-	c2 += tmv_to_TimeInterval(q->peer_delay);
-	c2 += q->asymmetry;
-	fup->header.correction = host2net64(c2);
-	count = transport_send(p->trp, &p->fda, TRANS_GENERAL, fup);
-	if (count <= 0) {
-		pr_err("tc failed to forward follow up on port %d", portnum(p));
-		port_dispatch(p, EV_FAULT_DETECTED, 0);
-	}
-	/* Restore original correction value for next egress port. */
-	fup->header.correction = host2net64(c1);
+	tc_send_folup_tlv(q, p, fup, cnt, residence);
+
 	TAILQ_REMOVE(&p->tc_transmitted, txd, list);
 	msg_put(txd->msg);
 	tc_recycle(txd);
 }
+
 static void tc_complete(struct port *q, struct port *p,
 			struct ptp_message *msg, tmv_t residence)
 {
