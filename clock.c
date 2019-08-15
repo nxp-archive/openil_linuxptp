@@ -615,7 +615,11 @@ static enum servo_state clock_no_adjust(struct clock *c, tmv_t ingress,
 	f->origin1 = origin;
 	f->count = 0;
 
-	c->master_local_rr = ratio;
+	/* Bridge doesn't need to maintian master_local_rr.
+	 * It calculates this ratio once receives follow_up_tlv.
+	 */
+	if (c->type != CLOCK_TYPE_BRIDGE)
+		c->master_local_rr = ratio;
 
 	return state;
 }
