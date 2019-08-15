@@ -236,33 +236,35 @@ static void tc_complete_syfup(struct port *q, struct port *p,
 }
 
 static void tc_send_folup_tlv(struct port *q, struct port *p,
-			      struct ptp_message *fup, int cnt,
+			      struct ptp_message *fup_dup,
 			      tmv_t residence)
 {
 	Integer64 c1, c2;
 	int count;
 
-	c1 = net2host64(fup->header.correction);
+	c1 = fup_dup->header.correction;
 	c2 = c1 + tmv_to_TimeInterval(residence);
 	c2 += tmv_to_TimeInterval(q->peer_delay);
 	c2 += q->asymmetry;
-	fup->header.correction = host2net64(c2);
-	count = transport_send(p->trp, &p->fda, TRANS_GENERAL, fup);
+	fup_dup->header.correction = c2;
+
+	if (msg_pre_send(fup_dup)) {
+		pr_err("tc failed to prepare folup_tlv on port %d", portnum(p));
+	}
+
+	count = transport_send(p->trp, &p->fda, TRANS_GENERAL, fup_dup);
 	if (count <= 0) {
 		pr_err("tc failed to forward follow up on port %d", portnum(p));
 		port_dispatch(p, EV_FAULT_DETECTED, 0);
 	}
-	/* Restore original correction value for next egress port. */
-	fup->header.correction = host2net64(c1);
 }
 
 static void tc_complete_folup_tlv(struct port *q, struct port *p,
-				  struct ptp_message *msg, int cnt)
+				  struct ptp_message *msg,
+				  struct ptp_message *dup)
 {
 	enum tc_match type = TC_MISMATCH;
-	struct ptp_message *fup;
 	struct tc_txd *txd;
-	tmv_t residence;
 
 	TAILQ_FOREACH(txd, &p->tc_transmitted, list) {
 		type = tc_match_syfup(portnum(q), msg, txd);
@@ -270,8 +272,6 @@ static void tc_complete_folup_tlv(struct port *q, struct port *p,
 		case TC_MISMATCH:
 			break;
 		case TC_SYNC_FUP:
-			fup = msg;
-			residence = txd->residence;
 			break;
 		default:
 			pr_err("tc: unexpected match in tc_complete_folup_tlv!");
@@ -296,7 +296,7 @@ static void tc_complete_folup_tlv(struct port *q, struct port *p,
 		return;
 	}
 
-	tc_send_folup_tlv(q, p, fup, cnt, residence);
+	tc_send_folup_tlv(q, p, dup, txd->residence);
 
 	TAILQ_REMOVE(&p->tc_transmitted, txd, list);
 	msg_put(txd->msg);
@@ -495,10 +495,18 @@ int tc_fwd_folup_tlv(struct port *q, struct ptp_message *msg, int cnt)
 	clock_gettime(CLOCK_MONOTONIC, &msg->ts.host);
 
 	for (p = clock_first_port(q->clock); p; p = LIST_NEXT(p, list)) {
+		struct ptp_message *dup;
+
 		if (tc_blocked(q, p, msg)) {
 			continue;
 		}
-		tc_complete_folup_tlv(q, p, msg, cnt);
+
+		dup = msg_duplicate(msg, cnt);
+		if (!dup)
+			return EV_NONE;
+
+		tc_complete_folup_tlv(q, p, msg, dup);
+		msg_put(dup);
 	}
 	return 0;
 }
