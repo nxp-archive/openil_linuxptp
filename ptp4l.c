@@ -288,6 +288,10 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "BRIDGE needs IEEE 802.3 network transport\n");
 			goto out;
 		}
+		if (config_get_int(cfg, NULL, "follow_up_info") == 0) {
+			fprintf(stderr, "BRIDGE needs follow_up_info\n");
+			goto out;
+		}
 		break;
 	case CLOCK_TYPE_MANAGEMENT:
 		goto out;
