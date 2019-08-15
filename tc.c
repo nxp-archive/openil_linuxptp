@@ -236,13 +236,13 @@ static void tc_complete_syfup(struct port *q, struct port *p,
 }
 
 static void tc_complete_folup_tlv(struct port *q, struct port *p,
-				  struct ptp_message *msg, int cnt,
-				  tmv_t residence)
+				  struct ptp_message *msg, int cnt)
 {
 	enum tc_match type = TC_MISMATCH;
 	struct ptp_message *fup;
 	struct tc_txd *txd;
 	Integer64 c1, c2;
+	tmv_t residence;
 	int count;
 
 	TAILQ_FOREACH(txd, &p->tc_transmitted, list) {
@@ -254,11 +254,8 @@ static void tc_complete_folup_tlv(struct port *q, struct port *p,
 			fup = msg;
 			residence = txd->residence;
 			break;
-		case TC_FUP_SYNC:
-			fup = txd->msg;
-			break;
-		case TC_DELAY_REQRESP:
-			pr_err("tc: unexpected match of delay request - sync!");
+		default:
+			pr_err("tc: unexpected match in tc_complete_folup_tlv!");
 			return;
 		}
 		if (type != TC_MISMATCH) {
@@ -274,7 +271,7 @@ static void tc_complete_folup_tlv(struct port *q, struct port *p,
 		}
 		msg_get(msg);
 		txd->msg = msg;
-		txd->residence = residence;
+		txd->residence = tmv_zero();
 		txd->ingress_port = portnum(q);
 		TAILQ_INSERT_TAIL(&p->tc_transmitted, txd, list);
 		return;
@@ -491,7 +488,7 @@ int tc_fwd_folup_tlv(struct port *q, struct ptp_message *msg, int cnt)
 		if (tc_blocked(q, p, msg)) {
 			continue;
 		}
-		tc_complete_folup_tlv(q, p, msg, cnt, tmv_zero());
+		tc_complete_folup_tlv(q, p, msg, cnt);
 	}
 	return 0;
 }
