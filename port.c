@@ -474,7 +474,7 @@ static int net_sync_resp_append(struct port *p, struct ptp_message *m)
 	return 0;
 }
 
-static struct follow_up_info_tlv *follow_up_info_extract(struct ptp_message *m)
+struct follow_up_info_tlv *follow_up_info_extract(struct ptp_message *m)
 {
 	struct follow_up_info_tlv *f;
 	struct tlv_extra *extra;

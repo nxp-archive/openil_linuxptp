@@ -335,4 +335,5 @@ enum bmca_select port_bmca(struct port *p);
  */
 void tc_cleanup(void);
 
+struct follow_up_info_tlv *follow_up_info_extract(struct ptp_message *m);
 #endif
