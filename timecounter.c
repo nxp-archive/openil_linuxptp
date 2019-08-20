@@ -2,12 +2,11 @@
 /*
  * Based on clocksource code. See commit 74d23cc704d1
  */
-#include <linux/export.h>
-#include <linux/timecounter.h>
+#include "timecounter.h"
 
 void timecounter_init(struct timecounter *tc,
 		      const struct cyclecounter *cc,
-		      u64 start_tstamp)
+		      uint64_t start_tstamp)
 {
 	tc->cc = cc;
 	tc->cycle_last = cc->read(cc);
@@ -15,7 +14,6 @@ void timecounter_init(struct timecounter *tc,
 	tc->mask = (1ULL << cc->shift) - 1;
 	tc->frac = 0;
 }
-EXPORT_SYMBOL_GPL(timecounter_init);
 
 /**
  * timecounter_read_delta - get nanoseconds since last call of this function
@@ -28,10 +26,10 @@ EXPORT_SYMBOL_GPL(timecounter_init);
  * The first call to this function for a new time counter initializes
  * the time tracking and returns an undefined result.
  */
-static u64 timecounter_read_delta(struct timecounter *tc)
+static uint64_t timecounter_read_delta(struct timecounter *tc)
 {
-	u64 cycle_now, cycle_delta;
-	u64 ns_offset;
+	uint64_t cycle_now, cycle_delta;
+	uint64_t ns_offset;
 
 	/* read cycle counter: */
 	cycle_now = tc->cc->read(tc->cc);
@@ -49,9 +47,9 @@ static u64 timecounter_read_delta(struct timecounter *tc)
 	return ns_offset;
 }
 
-u64 timecounter_read(struct timecounter *tc)
+uint64_t timecounter_read(struct timecounter *tc)
 {
-	u64 nsec;
+	uint64_t nsec;
 
 	/* increment time by nanoseconds since last call */
 	nsec = timecounter_read_delta(tc);
@@ -60,27 +58,26 @@ u64 timecounter_read(struct timecounter *tc)
 
 	return nsec;
 }
-EXPORT_SYMBOL_GPL(timecounter_read);
 
 /*
  * This is like cyclecounter_cyc2ns(), but it is used for computing a
  * time previous to the time stored in the cycle counter.
  */
-static u64 cc_cyc2ns_backwards(const struct cyclecounter *cc,
-			       u64 cycles, u64 mask, u64 frac)
+static uint64_t cc_cyc2ns_backwards(const struct cyclecounter *cc,
+			       uint64_t cycles, uint64_t mask, uint64_t frac)
 {
-	u64 ns = (u64) cycles;
+	uint64_t ns = (uint64_t) cycles;
 
 	ns = ((ns * cc->mult) - frac) >> cc->shift;
 
 	return ns;
 }
 
-u64 timecounter_cyc2time(struct timecounter *tc,
-			 u64 cycle_tstamp)
+uint64_t timecounter_cyc2time(struct timecounter *tc,
+			 uint64_t cycle_tstamp)
 {
-	u64 delta = (cycle_tstamp - tc->cycle_last) & tc->cc->mask;
-	u64 nsec = tc->nsec, frac = tc->frac;
+	uint64_t delta = (cycle_tstamp - tc->cycle_last) & tc->cc->mask;
+	uint64_t nsec = tc->nsec, frac = tc->frac;
 
 	/*
 	 * Instead of always treating cycle_tstamp as more recent
@@ -96,4 +93,3 @@ u64 timecounter_cyc2time(struct timecounter *tc,
 
 	return nsec;
 }
-EXPORT_SYMBOL_GPL(timecounter_cyc2time);

@@ -5,13 +5,13 @@
  * based on code that migrated away from
  * linux/include/linux/clocksource.h
  */
-#ifndef _LINUX_TIMECOUNTER_H
-#define _LINUX_TIMECOUNTER_H
+#ifndef HAVE_TIMECOUNTER_H
+#define HAVE_TIMECOUNTER_H
 
-#include <linux/types.h>
+#include <stdint.h>
 
 /* simplify initialization of mask field */
-#define CYCLECOUNTER_MASK(bits) (u64)((bits) < 64 ? ((1ULL<<(bits))-1) : -1)
+#define CYCLECOUNTER_MASK(bits) (uint64_t)((bits) < 64 ? ((1ULL<<(bits))-1) : -1)
 
 /**
  * struct cyclecounter - hardware abstraction for a free running counter
@@ -28,10 +28,10 @@
  * @shift:		cycle to nanosecond divisor (power of two)
  */
 struct cyclecounter {
-	u64 (*read)(const struct cyclecounter *cc);
-	u64 mask;
-	u32 mult;
-	u32 shift;
+	uint64_t (*read)(const struct cyclecounter *cc);
+	uint64_t mask;
+	uint32_t mult;
+	uint32_t shift;
 };
 
 /**
@@ -54,10 +54,10 @@ struct cyclecounter {
  */
 struct timecounter {
 	const struct cyclecounter *cc;
-	u64 cycle_last;
-	u64 nsec;
-	u64 mask;
-	u64 frac;
+	uint64_t cycle_last;
+	uint64_t nsec;
+	uint64_t mask;
+	uint64_t frac;
 };
 
 /**
@@ -67,10 +67,10 @@ struct timecounter {
  * @mask:	bit mask for maintaining the 'frac' field
  * @frac:	pointer to storage for the fractional nanoseconds.
  */
-static inline u64 cyclecounter_cyc2ns(const struct cyclecounter *cc,
-				      u64 cycles, u64 mask, u64 *frac)
+static inline uint64_t cyclecounter_cyc2ns(const struct cyclecounter *cc,
+				      uint64_t cycles, uint64_t mask, uint64_t *frac)
 {
-	u64 ns = (u64) cycles;
+	uint64_t ns = (uint64_t) cycles;
 
 	ns = (ns * cc->mult) + *frac;
 	*frac = ns & mask;
@@ -81,7 +81,7 @@ static inline u64 cyclecounter_cyc2ns(const struct cyclecounter *cc,
  * timecounter_adjtime - Shifts the time of the clock.
  * @delta:	Desired change in nanoseconds.
  */
-static inline void timecounter_adjtime(struct timecounter *tc, s64 delta)
+static inline void timecounter_adjtime(struct timecounter *tc, int64_t delta)
 {
 	tc->nsec += delta;
 }
@@ -98,7 +98,7 @@ static inline void timecounter_adjtime(struct timecounter *tc, s64 delta)
  */
 extern void timecounter_init(struct timecounter *tc,
 			     const struct cyclecounter *cc,
-			     u64 start_tstamp);
+			     uint64_t start_tstamp);
 
 /**
  * timecounter_read - return nanoseconds elapsed since timecounter_init()
@@ -108,7 +108,7 @@ extern void timecounter_init(struct timecounter *tc,
  * In other words, keeps track of time since the same epoch as
  * the function which generated the initial time stamp.
  */
-extern u64 timecounter_read(struct timecounter *tc);
+extern uint64_t timecounter_read(struct timecounter *tc);
 
 /**
  * timecounter_cyc2time - convert a cycle counter to same
@@ -124,7 +124,7 @@ extern u64 timecounter_read(struct timecounter *tc);
  * This allows conversion of cycle counter values which were generated
  * in the past.
  */
-extern u64 timecounter_cyc2time(struct timecounter *tc,
-				u64 cycle_tstamp);
+extern uint64_t timecounter_cyc2time(struct timecounter *tc,
+				uint64_t cycle_tstamp);
 
 #endif
