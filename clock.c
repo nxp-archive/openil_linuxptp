@@ -29,6 +29,7 @@
 #include "clock.h"
 #include "clockadj.h"
 #include "clockcheck.h"
+#include "contain.h"
 #include "foreign.h"
 #include "filter.h"
 #include "missing.h"
@@ -43,6 +44,7 @@
 #include "tsproc.h"
 #include "uds.h"
 #include "util.h"
+#include "timecounter.h"
 
 #ifdef SJA1105_SYNC
 #include "sja1105.h"
@@ -128,6 +130,9 @@ struct clock {
 	struct clockcheck *sanity_check;
 	struct interface uds_interface;
 	LIST_HEAD(clock_subscribers_head, clock_subscriber) subscribers;
+	/* This is for wall time */
+	struct timecounter timecounter;
+	struct cyclecounter cyclecounter;
 };
 
 struct clock the_clock;
@@ -859,6 +864,55 @@ static void ensure_ts_label(struct interface *iface)
 		strncpy(iface->ts_label, iface->name, MAX_IFNAME_SIZE);
 }
 
+static uint64_t cyclecounter_read(const struct cyclecounter *cc)
+{
+	struct clock *clock = container_of(cc, struct clock, cyclecounter);
+	struct timespec now;
+	tmv_t tmv;
+
+	clock_gettime(clock->clkid, &now);
+	tmv = timespec_to_tmv(now);
+	return tmv.ns;
+}
+
+void wall_clock_init(struct clock *clock)
+{
+	struct timecounter *tc = &clock->timecounter;
+	const struct cyclecounter *cc = &clock->cyclecounter;
+
+	tc->cc = cc;
+	tc->cycle_last = cc->read(cc);
+	tc->nsec = tc->cycle_last;
+	tc->mask = (1ULL << cc->shift) - 1;
+	tc->frac = 0;
+}
+
+uint64_t wall_clock_gettime(struct clock *clock)
+{
+	return timecounter_read(&clock->timecounter);
+}
+
+/* We don't need settime which introduces software delay. */
+void wall_clock_adjtime(struct clock *clock, int64_t delta)
+{
+	timecounter_adjtime(&clock->timecounter, delta);
+}
+
+/* Make sure wall_clock_* functions are not called after the local time,
+ * before calling this function.
+ */
+uint64_t wall_clock_of_local_time(struct clock *clock, uint64_t ns_local)
+{
+	struct timecounter *tc = &clock->timecounter;
+	uint64_t cycle_delta, ns_offset;
+
+	cycle_delta = (ns_local - tc->cycle_last) & tc->cc->mask;
+	ns_offset = (cycle_delta * tc->cc->mult) + tc->frac;
+	ns_offset = ns_offset >> tc->cc->shift;
+
+	return tc->nsec + ns_offset;
+}
+
 struct clock *clock_create(enum clock_type type, struct config *config,
 			   const char *phc_device)
 {
@@ -1043,7 +1097,7 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	c->utc_offset = config_get_int(config, NULL, "utc_offset");
 	c->time_source = config_get_int(config, NULL, "timeSource");
 
-	if (c->free_running) {
+	if (c->free_running && (c->type != CLOCK_TYPE_BRIDGE)) {
 		c->clkid = CLOCK_INVALID;
 		if (timestamping == TS_SOFTWARE || timestamping == TS_LEGACY_HW) {
 			c->utc_timescale = 1;
@@ -1076,6 +1130,18 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 		max_adj = sysclk_max_freq();
 		sysclk_set_leap(0);
 	}
+
+	if (c->type == CLOCK_TYPE_BRIDGE && c->clkid != CLOCK_INVALID) {
+		/* Create a software timecounter based on phc or sysclk for wall time. */
+		c->cyclecounter = (struct cyclecounter) {
+			.read = cyclecounter_read,
+			.mask = CYCLECOUNTER_MASK(64),
+			.shift = 31,
+			.mult = 1 << 31,
+		};
+		wall_clock_init(c);
+	}
+
 	c->utc_offset_set = 0;
 	c->leap_set = 0;
 	c->time_flags = c->utc_timescale ? 0 : PTP_TIMESCALE;
