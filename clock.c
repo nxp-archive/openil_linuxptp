@@ -935,6 +935,23 @@ void wall_clock_adjtime(struct clock *clock, int64_t delta)
 	timecounter_adjtime(&clock->timecounter, delta);
 }
 
+/* The adjfine API clamps ppb between [-32,768,000, 32,768,000], and
+ * therefore scaled_ppm between [-2,147,483,648, 2,147,483,647].
+ * Set the maximum supported ppb to a round value smaller than the maximum.
+ *
+ * Percentually speaking, this is a +/- 0.032x adjustment of the
+ * free-running counter (0.968x to 1.032x).
+ */
+void wall_clock_adjfreq(struct clock *clock, double ratio)
+{
+	if (ratio > 1.032 || ratio < 0.968) {
+		pr_warning("wall_clock_adjfeq ratio is not in range!");
+		return;
+	}
+	timecounter_read(&clock->timecounter);
+	clock->cyclecounter.mult = (1 << 31) * ratio;
+}
+
 /* Make sure wall_clock_* functions are not called after the local time,
  * before calling this function.
  */
