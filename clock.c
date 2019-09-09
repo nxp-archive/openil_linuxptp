@@ -1090,7 +1090,7 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	iface = STAILQ_FIRST(&config->interfaces);
 
 	/* determine PHC Clock index */
-	if (config_get_int(config, NULL, "free_running")) {
+	if (config_get_int(config, NULL, "free_running") && c->type != CLOCK_TYPE_BRIDGE) {
 		phc_index = -1;
 	} else if (timestamping == TS_SOFTWARE || timestamping == TS_LEGACY_HW) {
 		phc_index = -1;
