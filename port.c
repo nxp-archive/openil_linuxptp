@@ -2933,6 +2933,7 @@ struct port *port_open(int phc_index,
 	switch (type) {
 	case CLOCK_TYPE_ORDINARY:
 	case CLOCK_TYPE_BOUNDARY:
+	case CLOCK_TYPE_STATION:
 		p->dispatch = bc_dispatch;
 		p->event = bc_event;
 		break;
@@ -3034,8 +3035,8 @@ struct port *port_open(int phc_index,
 		pr_err("port %d: E2E TC needs E2E ports", number);
 		goto err_port;
 	}
-	if (number && type == CLOCK_TYPE_BRIDGE && p->delayMechanism != DM_P2P) {
-		pr_err("port %d: BRIDGE needs P2P ports", number);
+	if (number && clock_as_device(clock) && p->delayMechanism != DM_P2P) {
+		pr_err("port %d: BRIDGE/STATION needs P2P port", number);
 		goto err_port;
 	}
 	if (p->hybrid_e2e && p->delayMechanism != DM_E2E) {

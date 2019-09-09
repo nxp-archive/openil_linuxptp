@@ -624,7 +624,7 @@ static enum servo_state clock_no_adjust(struct clock *c, tmv_t ingress,
 	/* Bridge doesn't need to maintian master_local_rr.
 	 * It calculates this ratio once receives follow_up_tlv.
 	 */
-	if (c->type != CLOCK_TYPE_BRIDGE)
+	if (!clock_as_device(c))
 		c->master_local_rr = ratio;
 
 	return state;
@@ -995,6 +995,7 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	case CLOCK_TYPE_P2P:
 	case CLOCK_TYPE_E2E:
 	case CLOCK_TYPE_BRIDGE:
+	case CLOCK_TYPE_STATION:
 		c->type = type;
 		break;
 	case CLOCK_TYPE_MANAGEMENT:
@@ -1090,7 +1091,7 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	iface = STAILQ_FIRST(&config->interfaces);
 
 	/* determine PHC Clock index */
-	if (config_get_int(config, NULL, "free_running") && c->type != CLOCK_TYPE_BRIDGE) {
+	if (config_get_int(config, NULL, "free_running") && !clock_as_device(c)) {
 		phc_index = -1;
 	} else if (timestamping == TS_SOFTWARE || timestamping == TS_LEGACY_HW) {
 		phc_index = -1;
@@ -1151,7 +1152,7 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	c->utc_offset = config_get_int(config, NULL, "utc_offset");
 	c->time_source = config_get_int(config, NULL, "timeSource");
 
-	if (c->free_running && (c->type != CLOCK_TYPE_BRIDGE)) {
+	if (c->free_running && !clock_as_device(c)) {
 		c->clkid = CLOCK_INVALID;
 		if (timestamping == TS_SOFTWARE || timestamping == TS_LEGACY_HW) {
 			c->utc_timescale = 1;
@@ -1272,7 +1273,7 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	c->dds.numberPorts = c->nports;
 
 	/* Create wall clock */
-	if (c->type == CLOCK_TYPE_BRIDGE && c->clkid != CLOCK_INVALID) {
+	if (clock_as_device(c) && c->clkid != CLOCK_INVALID) {
 		if (wall_clock_init(c)) {
 			pr_err("failed to create wall clock");
 			return NULL;
@@ -1337,6 +1338,14 @@ void clock_follow_up_info(struct clock *c, struct follow_up_info_tlv *f)
 int clock_free_running(struct clock *c)
 {
 	return c->free_running ? 1 : 0;
+}
+
+int clock_as_device(struct clock *c)
+{
+	if (c->type == CLOCK_TYPE_BRIDGE ||
+	    c->type == CLOCK_TYPE_STATION)
+		return 1;
+	return 0;
 }
 
 int clock_gm_capable(struct clock *c)

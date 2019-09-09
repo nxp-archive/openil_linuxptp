@@ -144,6 +144,7 @@ static struct config_enum clock_type_enu[] = {
 	{ "P2P_TC",  CLOCK_TYPE_P2P      },
 	{ "E2E_TC",  CLOCK_TYPE_E2E      },
 	{ "BRIDGE",  CLOCK_TYPE_BRIDGE   },
+	{ "STATION", CLOCK_TYPE_STATION  },
 	{ NULL, 0 },
 };
 
