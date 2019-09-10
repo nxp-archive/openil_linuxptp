@@ -967,6 +967,36 @@ uint64_t wall_clock_of_local_time(struct clock *clock, uint64_t ns_local)
 	return tc->nsec + ns_offset;
 }
 
+void wall_clock_synchronize(struct clock *c, tmv_t ingress, tmv_t origin)
+{
+	double gm_rr;
+
+	if (tmv_is_zero(ingress) || tmv_is_zero(origin))
+		return;
+
+	/* Correct peer_delay for grand master time */
+	gm_rr = 1.0 + (c->status.cumulativeScaledRateOffset + 0.0) / POW2_41;
+	c->path_delay.ns *= gm_rr;
+
+	/* offset = t2 - t1 - delay */
+	c->master_offset = tmv_sub(tmv_sub(ingress, origin), c->path_delay);
+
+	/* Rate ratio between local clock and grand master */
+	gm_rr *= c->nrr;
+
+	if (clock_utc_correct(c, ingress))
+		return;
+
+	c->cur.offsetFromMaster = tmv_to_TimeInterval(c->master_offset);
+
+	pr_info("master offset %10" PRId64 " rate ratio %.9f path delay %9" PRId64,
+		tmv_to_nanoseconds(c->master_offset), gm_rr,
+		tmv_to_nanoseconds(c->path_delay));
+
+	wall_clock_adjtime(c, 0 - tmv_to_nanoseconds(c->master_offset));
+	wall_clock_adjfreq(c, gm_rr);
+}
+
 struct clock *clock_create(enum clock_type type, struct config *config,
 			   const char *phc_device)
 {

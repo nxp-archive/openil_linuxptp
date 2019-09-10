@@ -1117,7 +1117,7 @@ static void port_synchronize(struct port *p,
 			     Integer64 correction1, Integer64 correction2,
 			     Integer8 sync_interval)
 {
-	enum servo_state state, last_state;
+	enum servo_state state = SERVO_UNLOCKED, last_state;
 	tmv_t t1, t1c, t2, c1, c2;
 	struct servo *s;
 
@@ -1129,9 +1129,13 @@ static void port_synchronize(struct port *p,
 	c2 = correction_to_tmv(correction2);
 	t1c = tmv_add(t1, tmv_add(c1, c2));
 
-	s = clock_servo(p->clock);
-	last_state = clock_servo_state(p->clock);
-	state = clock_synchronize(p->clock, t2, t1c);
+	if (clock_as_device(p->clock)) {
+		wall_clock_synchronize(p->clock, t2, t1c);
+	} else {
+		s = clock_servo(p->clock);
+		last_state = clock_servo_state(p->clock);
+		state = clock_synchronize(p->clock, t2, t1c);
+	}
 	switch (state) {
 	case SERVO_UNLOCKED:
 		port_dispatch(p, EV_SYNCHRONIZATION_FAULT, 0);
@@ -2274,6 +2278,13 @@ void process_sync(struct port *p, struct ptp_message *m)
 				 m->header.logMessageInterval);
 		flush_last_sync(p);
 		return;
+	}
+
+	/* For bridge/station, SYNC receiving timestamp of local clock
+	 * is useless. We need the receiving timestamp of wall clock.
+	 */
+	if (clock_as_device(p->clock)) {
+		m->hwts.ts.ns = wall_clock_of_local_time(p->clock, m->hwts.ts.ns);
 	}
 
 	if (p->syfu == SF_HAVE_FUP &&

@@ -363,4 +363,10 @@ void clock_check_ts(struct clock *c, uint64_t ts);
  */
 double clock_rate_ratio(struct clock *c);
 
+int wall_clock_init(struct clock *clock);
+uint64_t wall_clock_gettime(struct clock *clock);
+void wall_clock_adjtime(struct clock *clock, int64_t delta);
+void wall_clock_adjfreq(struct clock *clock, double ratio);
+uint64_t wall_clock_of_local_time(struct clock *clock, uint64_t ns_local);
+void wall_clock_synchronize(struct clock *c, tmv_t ingress, tmv_t origin);
 #endif
