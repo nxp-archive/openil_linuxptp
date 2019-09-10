@@ -949,7 +949,8 @@ void wall_clock_adjfreq(struct clock *clock, double ratio)
 		return;
 	}
 	timecounter_read(&clock->timecounter);
-	clock->cyclecounter.mult = (1 << 31) * ratio;
+
+	clock->cyclecounter.mult = (uint32_t)(1 << 31) * ratio;
 }
 
 /* Make sure wall_clock_* functions are not called after the local time,
