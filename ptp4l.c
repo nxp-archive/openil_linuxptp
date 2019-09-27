@@ -292,10 +292,6 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "BRIDGE needs follow_up_info\n");
 			goto out;
 		}
-		if (config_get_int(cfg, NULL, "free_running") == 0) {
-			fprintf(stderr, "BRIDGE needs free_running\n");
-			goto out;
-		}
 		break;
 	case CLOCK_TYPE_STATION:
 		if (cfg->n_interfaces != 1) {
@@ -312,10 +308,6 @@ int main(int argc, char *argv[])
 		}
 		if (config_get_int(cfg, NULL, "follow_up_info") == 0) {
 			fprintf(stderr, "STATION needs follow_up_info\n");
-			goto out;
-		}
-		if (config_get_int(cfg, NULL, "free_running") == 0) {
-			fprintf(stderr, "STATION needs free_running\n");
 			goto out;
 		}
 		break;

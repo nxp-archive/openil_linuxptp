@@ -1304,7 +1304,7 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	c->dds.numberPorts = c->nports;
 
 	/* Create wall clock */
-	if (clock_as_device(c) && c->clkid != CLOCK_INVALID) {
+	if (clock_as_device(c) && c->free_running && c->clkid != CLOCK_INVALID) {
 		if (wall_clock_init(c)) {
 			pr_err("failed to create wall clock");
 			return NULL;

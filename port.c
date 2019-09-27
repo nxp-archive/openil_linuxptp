@@ -1129,7 +1129,7 @@ static void port_synchronize(struct port *p,
 	c2 = correction_to_tmv(correction2);
 	t1c = tmv_add(t1, tmv_add(c1, c2));
 
-	if (clock_as_device(p->clock)) {
+	if (clock_free_running(p->clock) && clock_as_device(p->clock)) {
 		wall_clock_synchronize(p->clock, t2, t1c);
 	} else {
 		s = clock_servo(p->clock);
@@ -2283,7 +2283,7 @@ void process_sync(struct port *p, struct ptp_message *m)
 	/* For bridge/station, SYNC receiving timestamp of local clock
 	 * is useless. We need the receiving timestamp of wall clock.
 	 */
-	if (clock_as_device(p->clock)) {
+	if (clock_free_running(p->clock) && clock_as_device(p->clock)) {
 		m->hwts.ts.ns = wall_clock_of_local_time(p->clock, m->hwts.ts.ns);
 	}
 
