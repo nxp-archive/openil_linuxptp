@@ -133,6 +133,7 @@ struct clock {
 	/* This is for wall time */
 	struct timecounter timecounter;
 	struct cyclecounter cyclecounter;
+	int fd_wall_clock_refresh;
 };
 
 struct clock the_clock;
@@ -875,16 +876,52 @@ static uint64_t cyclecounter_read(const struct cyclecounter *cc)
 	return tmv.ns;
 }
 
-void wall_clock_init(struct clock *clock)
+int wall_clock_init(struct clock *clock)
 {
 	struct timecounter *tc = &clock->timecounter;
-	const struct cyclecounter *cc = &clock->cyclecounter;
+	struct cyclecounter *cc = &clock->cyclecounter;
+	struct pollfd *new_pollfd;
+	int npollfd;
+
+	/* Create a software timecounter based on phc or sysclk for wall time. */
+	*cc = (struct cyclecounter) {
+		.read = cyclecounter_read,
+		.mask = CYCLECOUNTER_MASK(64),
+		.shift = 31,
+		.mult = 1 << 31,
+	};
 
 	tc->cc = cc;
 	tc->cycle_last = cc->read(cc);
 	tc->nsec = tc->cycle_last;
 	tc->mask = (1ULL << cc->shift) - 1;
 	tc->frac = 0;
+
+	/* Create timer to refresh wall clock
+	 *
+	 * cyclecounter.mult = 1 << 31
+	 * The uint64_t value will overflow when number of cycles is 1 << 33
+	 * which is 8.6 second, so refresh timecounter every 6 second.
+	 */
+	clock->fd_wall_clock_refresh = timerfd_create(CLOCK_MONOTONIC, 0);
+	if (clock->fd_wall_clock_refresh < 0)
+		return -1;
+
+	npollfd = (clock->nports + 1) * N_CLOCK_PFD + 1;
+	new_pollfd = realloc(clock->pollfd,
+			     npollfd * sizeof(struct pollfd));
+	if (!new_pollfd)
+		return -1;
+
+	clock->pollfd = new_pollfd;
+
+	clock->pollfd[npollfd - 1].fd = clock->fd_wall_clock_refresh;
+	clock->pollfd[npollfd - 1].events = POLLIN|POLLPRI;
+
+	if (set_tmo_lin(clock->fd_wall_clock_refresh, 6))
+		return -1;
+
+	return 0;
 }
 
 uint64_t wall_clock_gettime(struct clock *clock)
@@ -1131,17 +1168,6 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 		sysclk_set_leap(0);
 	}
 
-	if (c->type == CLOCK_TYPE_BRIDGE && c->clkid != CLOCK_INVALID) {
-		/* Create a software timecounter based on phc or sysclk for wall time. */
-		c->cyclecounter = (struct cyclecounter) {
-			.read = cyclecounter_read,
-			.mask = CYCLECOUNTER_MASK(64),
-			.shift = 31,
-			.mult = 1 << 31,
-		};
-		wall_clock_init(c);
-	}
-
 	c->utc_offset_set = 0;
 	c->leap_set = 0;
 	c->time_flags = c->utc_timescale ? 0 : PTP_TIMESCALE;
@@ -1227,6 +1253,14 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	}
 
 	c->dds.numberPorts = c->nports;
+
+	/* Create wall clock */
+	if (c->type == CLOCK_TYPE_BRIDGE && c->clkid != CLOCK_INVALID) {
+		if (wall_clock_init(c)) {
+			pr_err("failed to create wall clock");
+			return NULL;
+		}
+	}
 
 	LIST_FOREACH(p, &c->ports, list) {
 		port_dispatch(p, EV_INITIALIZE, 0);
@@ -1594,6 +1628,10 @@ int clock_poll(struct clock *c)
 		pollfd_num += 1;
 #endif
 	cnt = poll(c->pollfd, pollfd_num, -1);
+	if (c->fd_wall_clock_refresh)
+		cnt = poll(c->pollfd, pollfd_num + 1, -1);
+	else
+		cnt = poll(c->pollfd, pollfd_num, -1);
 	if (cnt < 0) {
 		if (EINTR == errno) {
 			return 0;
@@ -1619,6 +1657,15 @@ int clock_poll(struct clock *c)
 		}
 	}
 #endif
+
+	/* Check wall clock refresh timer */
+	if (c->fd_wall_clock_refresh) {
+		if (cur[pollfd_num].revents & (POLLIN|POLLPRI)) {
+			pr_debug("wall clock refresh timer timeout!");
+			wall_clock_gettime(c);
+			set_tmo_lin(c->fd_wall_clock_refresh, 6);
+		}
+	}
 
 	LIST_FOREACH(p, &c->ports, list) {
 		/* Let the ports handle their events. */
