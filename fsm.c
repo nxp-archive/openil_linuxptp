@@ -335,3 +335,16 @@ enum port_state ptp_slave_fsm(enum port_state state, enum fsm_event event,
 
 	return next;
 }
+
+enum port_state ieee8021as_fsm(enum port_state state, enum fsm_event event,
+			       int mdiff)
+{
+	enum port_state next = ptp_fsm(state, event, mdiff);
+
+	if (next == PS_UNCALIBRATED)
+		return PS_SLAVE;
+	if (next == PS_PRE_MASTER)
+		return PS_MASTER;
+
+	return next;
+}

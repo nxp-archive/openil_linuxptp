@@ -278,12 +278,16 @@ void fc_clear(struct foreign_clock *fc)
 
 static void fc_prune(struct foreign_clock *fc)
 {
+	int threshold = FOREIGN_MASTER_THRESHOLD;
 	struct timespec now;
 	struct ptp_message *m;
 
 	clock_gettime(CLOCK_MONOTONIC, &now);
 
-	while (fc->n_messages > FOREIGN_MASTER_THRESHOLD) {
+	if (port_is_ieee8021as(fc->port))
+		threshold = 1;
+
+	while (fc->n_messages > threshold) {
 		m = TAILQ_LAST(&fc->messages, messages);
 		TAILQ_REMOVE(&fc->messages, m, list);
 		fc->n_messages--;
@@ -339,6 +343,7 @@ void ts_add(tmv_t *ts, Integer64 correction)
  */
 static int add_foreign_master(struct port *p, struct ptp_message *m)
 {
+	int threshold = FOREIGN_MASTER_THRESHOLD;
 	struct foreign_clock *fc;
 	struct ptp_message *tmp;
 	int broke_threshold = 0, diff = 0;
@@ -362,15 +367,20 @@ static int add_foreign_master(struct port *p, struct ptp_message *m)
 		LIST_INSERT_HEAD(&p->foreign_masters, fc, list);
 		fc->port = p;
 		fc->dataset.sender = m->header.sourcePortIdentity;
-		/* We do not count this first message, see 9.5.3(b) */
-		return 0;
+		/* For 1588, we do not count this first message, see 9.5.3(b) */
+		if (!port_is_ieee8021as(fc->port))
+			return 0;
 	}
 
 	/*
 	 * If this message breaks the threshold, that is an important change.
 	 */
 	fc_prune(fc);
-	if (FOREIGN_MASTER_THRESHOLD - 1 == fc->n_messages) {
+
+	if (port_is_ieee8021as(fc->port))
+		threshold = 1;
+
+	if (threshold - 1 == fc->n_messages) {
 		broke_threshold = 1;
 	}
 
@@ -2445,6 +2455,7 @@ void port_close(struct port *p)
 struct foreign_clock *port_compute_best(struct port *p)
 {
 	int (*dscmp)(struct dataset *a, struct dataset *b);
+	int threshold = FOREIGN_MASTER_THRESHOLD;
 	struct foreign_clock *fc;
 	struct ptp_message *tmp;
 
@@ -2463,7 +2474,10 @@ struct foreign_clock *port_compute_best(struct port *p)
 
 		fc_prune(fc);
 
-		if (fc->n_messages < FOREIGN_MASTER_THRESHOLD)
+		if (port_is_ieee8021as(fc->port))
+			threshold = 1;
+
+		if (fc->n_messages < threshold)
 			continue;
 
 		if (!p->best)
@@ -3104,19 +3118,6 @@ struct port *port_open(const char *phc_device,
 	p->master_only = config_get_int(cfg, interface_name(interface), "masterOnly");
 	p->bmca = config_get_int(cfg, interface_name(interface), "BMCA");
 
-	if (p->bmca == BMCA_NOOP && transport != TRANS_UDS) {
-		if (p->master_only) {
-			p->state_machine = designated_master_fsm;
-		} else if (clock_slave_only(clock)) {
-			p->state_machine = designated_slave_fsm;
-		} else {
-			pr_err("Please enable at least one of masterOnly or slaveOnly when BMCA == noop.\n");
-			goto err_port;
-		}
-	} else {
-		p->state_machine = clock_slave_only(clock) ? ptp_slave_fsm : ptp_fsm;
-	}
-
 	if (transport == TRANS_UDS) {
 		; /* UDS cannot have a PHC. */
 	} else if (!interface_tsinfo_valid(interface)) {
@@ -3168,6 +3169,26 @@ struct port *port_open(const char *phc_device,
 	p->delayMechanism = config_get_int(cfg, p->name, "delay_mechanism");
 	p->versionNumber = PTP_VERSION;
 	p->slave_event_monitor = clock_slave_monitor(clock);
+
+	if (config_get_int(cfg, p->name, "asCapable") == AS_CAPABLE_TRUE) {
+		p->asCapable = ALWAYS_CAPABLE;
+	} else {
+		p->asCapable = NOT_CAPABLE;
+	}
+
+	if (p->bmca == BMCA_NOOP && transport != TRANS_UDS) {
+		if (p->master_only) {
+			p->state_machine = designated_master_fsm;
+		} else if (clock_slave_only(clock)) {
+			p->state_machine = designated_slave_fsm;
+		} else {
+			pr_err("Please enable at least one of masterOnly or slaveOnly when BMCA == noop.\n");
+			goto err_transport;
+		}
+	} else {
+		p->state_machine = clock_slave_only(clock) ? ptp_slave_fsm :
+				   port_is_ieee8021as(p) ? ieee8021as_fsm : ptp_fsm;
+	}
 
 	if (number && unicast_client_initialize(p)) {
 		goto err_transport;
