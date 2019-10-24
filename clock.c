@@ -1584,6 +1584,9 @@ int clock_poll(struct clock *c)
 				if (EV_ANNOUNCE_RECEIPT_TIMEOUT_EXPIRES == event) {
 					c->sde = 1;
 				}
+				if (EV_FAULT_DETECTED == event) {
+					c->sde = 1;
+				}
 				port_dispatch(p, event, 0);
 				/* Clear any fault after a little while. */
 				if (PS_FAULTY == port_state(p)) {
