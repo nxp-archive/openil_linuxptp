@@ -47,6 +47,7 @@
 
 #define ALLOWED_LOST_RESPONSES 3
 #define ANNOUNCE_SPAN 1
+#define MAX_NEIGHBOR_FREQ_OFFSET 0.0002
 
 enum syfu_event {
 	SYNC_MISMATCH,
@@ -1024,6 +1025,7 @@ static int port_management_set(struct port *target,
 static void port_nrate_calculate(struct port *p, tmv_t origin, tmv_t ingress)
 {
 	struct nrate_estimator *n = &p->nrate;
+	double ratio;
 
 	/*
 	 * We experienced a successful exchanges of peer delay request
@@ -1044,9 +1046,18 @@ static void port_nrate_calculate(struct port *p, tmv_t origin, tmv_t ingress)
 		pr_warning("bad timestamps in nrate calculation");
 		return;
 	}
-	n->ratio =
+
+	ratio =
 		tmv_dbl(tmv_sub(origin, n->origin1)) /
 		tmv_dbl(tmv_sub(ingress, n->ingress1));
+
+	if ((ratio <= (1.0 + MAX_NEIGHBOR_FREQ_OFFSET)) &&
+	    (ratio >= (1.0 - MAX_NEIGHBOR_FREQ_OFFSET)))
+		n->ratio = ratio;
+	else
+		pr_debug("port %hu: drop erroneous nratio %lf, max offset %lf",
+			 portnum(p), ratio, MAX_NEIGHBOR_FREQ_OFFSET);
+
 	n->ingress1 = ingress;
 	n->origin1 = origin;
 	n->count = 0;
