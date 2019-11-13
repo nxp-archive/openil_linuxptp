@@ -46,7 +46,6 @@
 #include "util.h"
 
 #define N_CLOCK_PFD (N_POLLFD + 1) /* one extra per port, for the fault timer */
-#define POW2_41 ((double)(1ULL << 41))
 
 struct interface {
 	STAILQ_ENTRY(interface) list;
@@ -130,6 +129,7 @@ struct clock {
 	int stats_interval;
 	struct clockcheck *sanity_check;
 	struct interface *udsif;
+	struct syfu_relay_info syfu_relay;
 	LIST_HEAD(clock_subscribers_head, clock_subscriber) subscribers;
 	struct monitor *slave_event_monitor;
 };
@@ -1161,6 +1161,8 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 		}
 	}
 
+	memset(&c->syfu_relay, 0, sizeof(struct syfu_relay_info));
+
 	/* Initialize the parentDS. */
 	clock_update_grandmaster(c);
 	c->dad.pds.parentStats                           = 0;
@@ -1256,6 +1258,15 @@ void clock_follow_up_info(struct clock *c, struct follow_up_info_tlv *f)
 	c->status.gmTimeBaseIndicator = f->gmTimeBaseIndicator;
 	memcpy(&c->status.lastGmPhaseChange, &f->lastGmPhaseChange,
 	       sizeof(c->status.lastGmPhaseChange));
+}
+
+static void clock_get_follow_up_info(struct clock *c, struct follow_up_info_tlv *f)
+{
+	f->cumulativeScaledRateOffset = c->status.cumulativeScaledRateOffset;
+	f->scaledLastGmPhaseChange = c->status.scaledLastGmPhaseChange;
+	f->gmTimeBaseIndicator = c->status.gmTimeBaseIndicator;
+	memcpy(&f->lastGmPhaseChange, &c->status.lastGmPhaseChange,
+	       sizeof(f->lastGmPhaseChange));
 }
 
 int clock_free_running(struct clock *c)
@@ -1645,6 +1656,16 @@ struct monitor *clock_slave_monitor(struct clock *c)
 	return c->slave_event_monitor;
 }
 
+tmv_t clock_get_path_delay(struct clock *c)
+{
+	return c->path_delay;
+}
+
+double clock_get_nrr(struct clock *c)
+{
+	return c->nrr;
+}
+
 int clock_slave_only(struct clock *c)
 {
 	return c->dds.flags & DDS_SLAVE_ONLY;
@@ -1867,6 +1888,7 @@ static void handle_state_decision_event(struct clock *c)
 		c->master_local_rr = 1.0;
 		c->nrr = 1.0;
 		fresh_best = 1;
+		clock_disable_syfu_relay(c);
 	}
 
 	c->best = best;
@@ -1937,4 +1959,23 @@ struct servo *clock_servo(struct clock *c)
 enum servo_state clock_servo_state(struct clock *c)
 {
 	return c->servo_state;
+}
+
+void clock_prepare_syfu_relay(struct clock *c, struct ptp_message *sync,
+			      struct ptp_message *fup)
+{
+	c->syfu_relay.precise_origin_ts = timestamp_to_tmv(fup->ts.pdu);
+	c->syfu_relay.correction = fup->header.correction;
+	clock_get_follow_up_info(c, &c->syfu_relay.fup_info_tlv);
+	c->syfu_relay.avail = 1;
+}
+
+void clock_disable_syfu_relay(struct clock *c)
+{
+	c->syfu_relay.avail = 0;
+}
+
+struct syfu_relay_info *clock_get_syfu_relay(struct clock *c)
+{
+	return &c->syfu_relay;
 }

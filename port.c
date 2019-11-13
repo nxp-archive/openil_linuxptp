@@ -1282,6 +1282,10 @@ static void port_syfufsm(struct port *p, enum syfu_event event,
 			break;
 		case FUP_MATCH:
 			syn = p->last_syncfup;
+			if (port_is_ieee8021as(p))
+				clock_prepare_syfu_relay(p->clock, syn, m);
+			else
+				clock_disable_syfu_relay(p->clock);
 			port_synchronize(p, syn->header.sequenceId,
 					 syn->hwts.ts, m->ts.pdu,
 					 syn->header.correction,
@@ -1304,6 +1308,10 @@ static void port_syfufsm(struct port *p, enum syfu_event event,
 			break;
 		case SYNC_MATCH:
 			fup = p->last_syncfup;
+			if (port_is_ieee8021as(p))
+				clock_prepare_syfu_relay(p->clock, m, fup);
+			else
+				clock_disable_syfu_relay(p->clock);
 			port_synchronize(p, fup->header.sequenceId,
 					 m->hwts.ts, fup->ts.pdu,
 					 m->header.correction,
@@ -1495,6 +1503,60 @@ int port_tx_announce(struct port *p, struct address *dst)
 	return err;
 }
 
+static void port_syfu_relay_info_insert(struct port *p,
+					struct ptp_message *sync,
+					struct ptp_message *fup)
+{
+	struct syfu_relay_info *syfu_relay = clock_get_syfu_relay(p->clock);
+	struct follow_up_info_tlv *fui_relay = &syfu_relay->fup_info_tlv;
+	struct follow_up_info_tlv *fui = follow_up_info_extract(fup);
+	tmv_t ingress, egress, residence, path_delay;
+	double gm_rr, nrr, rr;
+	struct timestamp ts;
+
+	if (syfu_relay->avail == 0)
+		return;
+
+	fup->follow_up.preciseOriginTimestamp =
+		tmv_to_Timestamp(syfu_relay->precise_origin_ts);
+	fup->header.correction = syfu_relay->correction;
+
+	/* Calculate residence time. */
+	ingress = clock_ingress_time(p->clock);
+	egress = sync->hwts.ts;
+	residence = tmv_sub(egress, ingress);
+	rr = clock_rate_ratio(p->clock);
+	if (rr != 1.0) {
+		residence = dbl_tmv(tmv_dbl(residence) * rr);
+	}
+
+	gm_rr = 1.0 + (fui_relay->cumulativeScaledRateOffset + 0.0) / POW2_41;
+	nrr = clock_get_nrr(p->clock);
+
+	/* Add corrected residence time into correction. */
+	fup->header.correction += tmv_to_TimeInterval(residence) * gm_rr * nrr;
+
+	/* Add corrected path delay into correction. */
+	path_delay = clock_get_path_delay(p->clock);
+	fup->header.correction += tmv_to_TimeInterval(path_delay) * gm_rr;
+
+	/* Update follow_up TLV */
+	gm_rr *= nrr;
+	fui->cumulativeScaledRateOffset = gm_rr * POW2_41 - POW2_41;
+	fui->scaledLastGmPhaseChange = fui_relay->scaledLastGmPhaseChange;
+	fui->gmTimeBaseIndicator = fui_relay->gmTimeBaseIndicator;
+	memcpy(&fui->lastGmPhaseChange, &fui_relay->lastGmPhaseChange,
+	       sizeof(fui->lastGmPhaseChange));
+
+	ts.sec = fup->follow_up.preciseOriginTimestamp.seconds_msb;
+	ts.sec = ts.sec << 32 | fup->follow_up.preciseOriginTimestamp.seconds_lsb;
+	ts.nsec = fup->follow_up.preciseOriginTimestamp.nanoseconds;
+	pr_debug("port %hu: syfu_relay info:", portnum(p));
+	pr_debug("port %hu:   precise_origin_ts %" PRIu64 ".%u", portnum(p), ts.sec, ts.nsec);
+	pr_debug("port %hu:   correction %" PRId64, portnum(p), fup->header.correction >> 16);
+	pr_debug("port %hu:   fup_info %.9f", portnum(p), gm_rr);
+}
+
 int port_tx_sync(struct port *p, struct address *dst)
 {
 	struct ptp_message *msg, *fup;
@@ -1588,10 +1650,15 @@ int port_tx_sync(struct port *p, struct address *dst)
 		fup->address = *dst;
 		fup->header.flagField[0] |= UNICAST;
 	}
-	if (p->follow_up_info && follow_up_info_append(fup)) {
-		pr_err("port %hu: append fup info failed", portnum(p));
-		err = -1;
-		goto out;
+
+	if (p->follow_up_info) {
+		if (follow_up_info_append(fup)) {
+			pr_err("port %hu: append fup info failed", portnum(p));
+			err = -1;
+			goto out;
+		}
+
+		port_syfu_relay_info_insert(p, msg, fup);
 	}
 
 	err = port_prepare_and_send(p, fup, TRANS_GENERAL);
