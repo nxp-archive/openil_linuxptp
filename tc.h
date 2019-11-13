@@ -49,8 +49,6 @@ int tc_forward(struct port *q, struct ptp_message *msg);
  */
 int tc_fwd_folup(struct port *q, struct ptp_message *msg);
 
-int tc_fwd_folup_tlv(struct port *q, struct ptp_message *msg, int cnt);
-
 /**
  * Forwards a given delay request message out all other ports.
  *

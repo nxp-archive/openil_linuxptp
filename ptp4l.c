@@ -275,42 +275,6 @@ int main(int argc, char *argv[])
 			goto out;
 		}
 		break;
-	case CLOCK_TYPE_BRIDGE:
-		if (cfg->n_interfaces < 2) {
-			fprintf(stderr, "BRIDGE needs at least two interfaces\n");
-			goto out;
-		}
-		if (DM_P2P != config_get_int(cfg, NULL, "delay_mechanism")) {
-			fprintf(stderr, "BRIDGE needs P2P delay mechanism\n");
-			goto out;
-		}
-		if (TRANS_IEEE_802_3 != config_get_int(cfg, NULL, "network_transport")) {
-			fprintf(stderr, "BRIDGE needs IEEE 802.3 network transport\n");
-			goto out;
-		}
-		if (config_get_int(cfg, NULL, "follow_up_info") == 0) {
-			fprintf(stderr, "BRIDGE needs follow_up_info\n");
-			goto out;
-		}
-		break;
-	case CLOCK_TYPE_STATION:
-		if (cfg->n_interfaces != 1) {
-			fprintf(stderr, "STATION needs only one interface\n");
-			goto out;
-		}
-		if (DM_P2P != config_get_int(cfg, NULL, "delay_mechanism")) {
-			fprintf(stderr, "STATION needs P2P delay mechanism\n");
-			goto out;
-		}
-		if (TRANS_IEEE_802_3 != config_get_int(cfg, NULL, "network_transport")) {
-			fprintf(stderr, "STATION needs IEEE 802.3 network transport\n");
-			goto out;
-		}
-		if (config_get_int(cfg, NULL, "follow_up_info") == 0) {
-			fprintf(stderr, "STATION needs follow_up_info\n");
-			goto out;
-		}
-		break;
 	case CLOCK_TYPE_MANAGEMENT:
 		goto out;
 	}

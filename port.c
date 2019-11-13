@@ -474,7 +474,7 @@ static int net_sync_resp_append(struct port *p, struct ptp_message *m)
 	return 0;
 }
 
-struct follow_up_info_tlv *follow_up_info_extract(struct ptp_message *m)
+static struct follow_up_info_tlv *follow_up_info_extract(struct ptp_message *m)
 {
 	struct follow_up_info_tlv *f;
 	struct tlv_extra *extra;
@@ -1117,7 +1117,7 @@ static void port_synchronize(struct port *p,
 			     Integer64 correction1, Integer64 correction2,
 			     Integer8 sync_interval)
 {
-	enum servo_state state = SERVO_UNLOCKED, last_state;
+	enum servo_state state, last_state;
 	tmv_t t1, t1c, t2, c1, c2;
 	struct servo *s;
 
@@ -1129,13 +1129,9 @@ static void port_synchronize(struct port *p,
 	c2 = correction_to_tmv(correction2);
 	t1c = tmv_add(t1, tmv_add(c1, c2));
 
-	if (clock_free_running(p->clock) && clock_as_device(p->clock)) {
-		wall_clock_synchronize(p->clock, t2, t1c);
-	} else {
-		s = clock_servo(p->clock);
-		last_state = clock_servo_state(p->clock);
-		state = clock_synchronize(p->clock, t2, t1c);
-	}
+	s = clock_servo(p->clock);
+	last_state = clock_servo_state(p->clock);
+	state = clock_synchronize(p->clock, t2, t1c);
 	switch (state) {
 	case SERVO_UNLOCKED:
 		port_dispatch(p, EV_SYNCHRONIZATION_FAULT, 0);
@@ -2280,13 +2276,6 @@ void process_sync(struct port *p, struct ptp_message *m)
 		return;
 	}
 
-	/* For bridge/station, SYNC receiving timestamp of local clock
-	 * is useless. We need the receiving timestamp of wall clock.
-	 */
-	if (clock_free_running(p->clock) && clock_as_device(p->clock)) {
-		m->hwts.ts.ns = wall_clock_of_local_time(p->clock, m->hwts.ts.ns);
-	}
-
 	if (p->syfu == SF_HAVE_FUP &&
 	    fup_sync_ok(p->last_syncfup, m) &&
 	    p->last_syncfup->header.sequenceId == m->header.sequenceId) {
@@ -2944,7 +2933,6 @@ struct port *port_open(int phc_index,
 	switch (type) {
 	case CLOCK_TYPE_ORDINARY:
 	case CLOCK_TYPE_BOUNDARY:
-	case CLOCK_TYPE_STATION:
 		p->dispatch = bc_dispatch;
 		p->event = bc_event;
 		break;
@@ -2955,10 +2943,6 @@ struct port *port_open(int phc_index,
 	case CLOCK_TYPE_E2E:
 		p->dispatch = e2e_dispatch;
 		p->event = e2e_event;
-		break;
-	case CLOCK_TYPE_BRIDGE:
-		p->dispatch = bridge_dispatch;
-		p->event = bridge_event;
 		break;
 	case CLOCK_TYPE_MANAGEMENT:
 		goto err_port;
@@ -3044,10 +3028,6 @@ struct port *port_open(int phc_index,
 	}
 	if (number && type == CLOCK_TYPE_E2E && p->delayMechanism != DM_E2E) {
 		pr_err("port %d: E2E TC needs E2E ports", number);
-		goto err_port;
-	}
-	if (number && clock_as_device(clock) && p->delayMechanism != DM_P2P) {
-		pr_err("port %d: BRIDGE/STATION needs P2P port", number);
 		goto err_port;
 	}
 	if (p->hybrid_e2e && p->delayMechanism != DM_E2E) {

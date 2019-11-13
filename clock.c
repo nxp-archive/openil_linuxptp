@@ -29,7 +29,6 @@
 #include "clock.h"
 #include "clockadj.h"
 #include "clockcheck.h"
-#include "contain.h"
 #include "foreign.h"
 #include "filter.h"
 #include "missing.h"
@@ -44,7 +43,6 @@
 #include "tsproc.h"
 #include "uds.h"
 #include "util.h"
-#include "timecounter.h"
 
 #ifdef SJA1105_SYNC
 #include "sja1105.h"
@@ -130,10 +128,6 @@ struct clock {
 	struct clockcheck *sanity_check;
 	struct interface uds_interface;
 	LIST_HEAD(clock_subscribers_head, clock_subscriber) subscribers;
-	/* This is for wall time */
-	struct timecounter timecounter;
-	struct cyclecounter cyclecounter;
-	int fd_wall_clock_refresh;
 };
 
 struct clock the_clock;
@@ -621,11 +615,7 @@ static enum servo_state clock_no_adjust(struct clock *c, tmv_t ingress,
 	f->origin1 = origin;
 	f->count = 0;
 
-	/* Bridge doesn't need to maintian master_local_rr.
-	 * It calculates this ratio once receives follow_up_tlv.
-	 */
-	if (!clock_as_device(c))
-		c->master_local_rr = ratio;
+	c->master_local_rr = ratio;
 
 	return state;
 }
@@ -865,139 +855,6 @@ static void ensure_ts_label(struct interface *iface)
 		strncpy(iface->ts_label, iface->name, MAX_IFNAME_SIZE);
 }
 
-static uint64_t cyclecounter_read(const struct cyclecounter *cc)
-{
-	struct clock *clock = container_of(cc, struct clock, cyclecounter);
-	struct timespec now;
-	tmv_t tmv;
-
-	clock_gettime(clock->clkid, &now);
-	tmv = timespec_to_tmv(now);
-	return tmv.ns;
-}
-
-int wall_clock_init(struct clock *clock)
-{
-	struct timecounter *tc = &clock->timecounter;
-	struct cyclecounter *cc = &clock->cyclecounter;
-	struct pollfd *new_pollfd;
-	int npollfd;
-
-	/* Create a software timecounter based on phc or sysclk for wall time. */
-	*cc = (struct cyclecounter) {
-		.read = cyclecounter_read,
-		.mask = CYCLECOUNTER_MASK(64),
-		.shift = 31,
-		.mult = 1 << 31,
-	};
-
-	tc->cc = cc;
-	tc->cycle_last = cc->read(cc);
-	tc->nsec = tc->cycle_last;
-	tc->mask = (1ULL << cc->shift) - 1;
-	tc->frac = 0;
-
-	/* Create timer to refresh wall clock
-	 *
-	 * cyclecounter.mult = 1 << 31
-	 * The uint64_t value will overflow when number of cycles is 1 << 33
-	 * which is 8.6 second, so refresh timecounter every 6 second.
-	 */
-	clock->fd_wall_clock_refresh = timerfd_create(CLOCK_MONOTONIC, 0);
-	if (clock->fd_wall_clock_refresh < 0)
-		return -1;
-
-	npollfd = (clock->nports + 1) * N_CLOCK_PFD + 1;
-	new_pollfd = realloc(clock->pollfd,
-			     npollfd * sizeof(struct pollfd));
-	if (!new_pollfd)
-		return -1;
-
-	clock->pollfd = new_pollfd;
-
-	clock->pollfd[npollfd - 1].fd = clock->fd_wall_clock_refresh;
-	clock->pollfd[npollfd - 1].events = POLLIN|POLLPRI;
-
-	if (set_tmo_lin(clock->fd_wall_clock_refresh, 6))
-		return -1;
-
-	return 0;
-}
-
-uint64_t wall_clock_gettime(struct clock *clock)
-{
-	return timecounter_read(&clock->timecounter);
-}
-
-/* We don't need settime which introduces software delay. */
-void wall_clock_adjtime(struct clock *clock, int64_t delta)
-{
-	timecounter_adjtime(&clock->timecounter, delta);
-}
-
-/* The adjfine API clamps ppb between [-32,768,000, 32,768,000], and
- * therefore scaled_ppm between [-2,147,483,648, 2,147,483,647].
- * Set the maximum supported ppb to a round value smaller than the maximum.
- *
- * Percentually speaking, this is a +/- 0.032x adjustment of the
- * free-running counter (0.968x to 1.032x).
- */
-void wall_clock_adjfreq(struct clock *clock, double ratio)
-{
-	if (ratio > 1.032 || ratio < 0.968) {
-		pr_warning("wall_clock_adjfeq ratio is not in range!");
-		return;
-	}
-	timecounter_read(&clock->timecounter);
-
-	clock->cyclecounter.mult = (uint32_t)(1 << 31) * ratio;
-}
-
-/* Make sure wall_clock_* functions are not called after the local time,
- * before calling this function.
- */
-uint64_t wall_clock_of_local_time(struct clock *clock, uint64_t ns_local)
-{
-	struct timecounter *tc = &clock->timecounter;
-	uint64_t cycle_delta, ns_offset;
-
-	cycle_delta = (ns_local - tc->cycle_last) & tc->cc->mask;
-	ns_offset = (cycle_delta * tc->cc->mult) + tc->frac;
-	ns_offset = ns_offset >> tc->cc->shift;
-
-	return tc->nsec + ns_offset;
-}
-
-void wall_clock_synchronize(struct clock *c, tmv_t ingress, tmv_t origin)
-{
-	double gm_rr;
-
-	if (tmv_is_zero(ingress) || tmv_is_zero(origin))
-		return;
-
-	/* Correct peer_delay for grand master time */
-	gm_rr = 1.0 + (c->status.cumulativeScaledRateOffset + 0.0) / POW2_41;
-	c->path_delay.ns *= gm_rr;
-
-	/* offset = t2 - t1 - delay */
-	c->master_offset = tmv_sub(tmv_sub(ingress, origin), c->path_delay);
-
-	/* Rate ratio between local clock and grand master */
-	gm_rr *= c->nrr;
-
-	if (clock_utc_correct(c, ingress))
-		return;
-
-	c->cur.offsetFromMaster = tmv_to_TimeInterval(c->master_offset);
-
-	pr_info("master offset %10" PRId64 " rate ratio %.9f path delay %9" PRId64,
-		tmv_to_nanoseconds(c->master_offset), gm_rr,
-		tmv_to_nanoseconds(c->path_delay));
-
-	wall_clock_adjtime(c, 0 - tmv_to_nanoseconds(c->master_offset));
-	wall_clock_adjfreq(c, gm_rr);
-}
-
 struct clock *clock_create(enum clock_type type, struct config *config,
 			   const char *phc_device)
 {
@@ -1025,8 +882,6 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	case CLOCK_TYPE_BOUNDARY:
 	case CLOCK_TYPE_P2P:
 	case CLOCK_TYPE_E2E:
-	case CLOCK_TYPE_BRIDGE:
-	case CLOCK_TYPE_STATION:
 		c->type = type;
 		break;
 	case CLOCK_TYPE_MANAGEMENT:
@@ -1122,7 +977,7 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	iface = STAILQ_FIRST(&config->interfaces);
 
 	/* determine PHC Clock index */
-	if (config_get_int(config, NULL, "free_running") && !clock_as_device(c)) {
+	if (config_get_int(config, NULL, "free_running")) {
 		phc_index = -1;
 	} else if (timestamping == TS_SOFTWARE || timestamping == TS_LEGACY_HW) {
 		phc_index = -1;
@@ -1183,7 +1038,7 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 	c->utc_offset = config_get_int(config, NULL, "utc_offset");
 	c->time_source = config_get_int(config, NULL, "timeSource");
 
-	if (c->free_running && !clock_as_device(c)) {
+	if (c->free_running) {
 		c->clkid = CLOCK_INVALID;
 		if (timestamping == TS_SOFTWARE || timestamping == TS_LEGACY_HW) {
 			c->utc_timescale = 1;
@@ -1216,7 +1071,6 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 		max_adj = sysclk_max_freq();
 		sysclk_set_leap(0);
 	}
-
 	c->utc_offset_set = 0;
 	c->leap_set = 0;
 	c->time_flags = c->utc_timescale ? 0 : PTP_TIMESCALE;
@@ -1303,14 +1157,6 @@ struct clock *clock_create(enum clock_type type, struct config *config,
 
 	c->dds.numberPorts = c->nports;
 
-	/* Create wall clock */
-	if (clock_as_device(c) && c->free_running && c->clkid != CLOCK_INVALID) {
-		if (wall_clock_init(c)) {
-			pr_err("failed to create wall clock");
-			return NULL;
-		}
-	}
-
 	LIST_FOREACH(p, &c->ports, list) {
 		port_dispatch(p, EV_INITIALIZE, 0);
 	}
@@ -1369,14 +1215,6 @@ void clock_follow_up_info(struct clock *c, struct follow_up_info_tlv *f)
 int clock_free_running(struct clock *c)
 {
 	return c->free_running ? 1 : 0;
-}
-
-int clock_as_device(struct clock *c)
-{
-	if (c->type == CLOCK_TYPE_BRIDGE ||
-	    c->type == CLOCK_TYPE_STATION)
-		return 1;
-	return 0;
 }
 
 int clock_gm_capable(struct clock *c)
@@ -1685,10 +1523,6 @@ int clock_poll(struct clock *c)
 		pollfd_num += 1;
 #endif
 	cnt = poll(c->pollfd, pollfd_num, -1);
-	if (c->fd_wall_clock_refresh)
-		cnt = poll(c->pollfd, pollfd_num + 1, -1);
-	else
-		cnt = poll(c->pollfd, pollfd_num, -1);
 	if (cnt < 0) {
 		if (EINTR == errno) {
 			return 0;
@@ -1714,15 +1548,6 @@ int clock_poll(struct clock *c)
 		}
 	}
 #endif
-
-	/* Check wall clock refresh timer */
-	if (c->fd_wall_clock_refresh) {
-		if (cur[pollfd_num].revents & (POLLIN|POLLPRI)) {
-			pr_debug("wall clock refresh timer timeout!");
-			wall_clock_gettime(c);
-			set_tmo_lin(c->fd_wall_clock_refresh, 6);
-		}
-	}
 
 	LIST_FOREACH(p, &c->ports, list) {
 		/* Let the ports handle their events. */

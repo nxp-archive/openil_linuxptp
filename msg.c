@@ -240,14 +240,9 @@ static void timestamp_post_recv(struct ptp_message *m, struct Timestamp *ts)
 {
 	uint32_t lsb = ntohl(ts->seconds_lsb);
 	uint16_t msb = ntohs(ts->seconds_msb);
-	uint32_t nsec = ntohl(ts->nanoseconds);
 
 	m->ts.pdu.sec  = ((uint64_t)lsb) | (((uint64_t)msb) << 32);
-	m->ts.pdu.nsec = nsec;
-
-	ts->seconds_lsb = lsb;
-	ts->seconds_msb = msb;
-	ts->nanoseconds = nsec;
+	m->ts.pdu.nsec = ntohl(ts->nanoseconds);
 }
 
 static void timestamp_pre_send(struct Timestamp *ts)

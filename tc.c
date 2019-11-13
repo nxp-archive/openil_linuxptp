@@ -23,8 +23,6 @@
 #include "tc.h"
 #include "tmv.h"
 
-#define POW2_41 ((double)(1ULL << 41))
-
 enum tc_match {
 	TC_MISMATCH,
 	TC_SYNC_FUP,
@@ -237,89 +235,6 @@ static void tc_complete_syfup(struct port *q, struct port *p,
 	tc_recycle(txd);
 }
 
-static void tc_send_folup_tlv(struct port *q, struct port *p,
-			      struct ptp_message *fup_dup,
-			      tmv_t residence)
-{
-	struct follow_up_info_tlv *fui;
-	Integer64 c1, c2;
-	double gm_rr, nrr;
-	int count;
-
-	fui = follow_up_info_extract(fup_dup);
-	if (!fui) {
-		pr_err("tc failed to extract folup_tlv!");
-		return;
-	}
-
-	nrr = q->nrate.ratio;
-	gm_rr = 1.0 + (fui->cumulativeScaledRateOffset + 0.0) / POW2_41;
-
-	/* Convert residence/peer_delay to grand master time */
-	c1 = fup_dup->header.correction;
-	c2 = c1 + tmv_to_TimeInterval(residence) * gm_rr * nrr;
-	c2 += tmv_to_TimeInterval(q->peer_delay) * gm_rr;
-	c2 += q->asymmetry;
-	fup_dup->header.correction = c2;
-
-	/* Accumulate neighbor rate ratio */
-	fui->cumulativeScaledRateOffset = (gm_rr * nrr - 1.0) * POW2_41;
-
-	if (msg_pre_send(fup_dup)) {
-		pr_err("tc failed to prepare folup_tlv on port %d", portnum(p));
-	}
-
-	count = transport_send(p->trp, &p->fda, TRANS_GENERAL, fup_dup);
-	if (count <= 0) {
-		pr_err("tc failed to forward follow up on port %d", portnum(p));
-		port_dispatch(p, EV_FAULT_DETECTED, 0);
-	}
-}
-
-static void tc_complete_folup_tlv(struct port *q, struct port *p,
-				  struct ptp_message *msg,
-				  struct ptp_message *dup)
-{
-	enum tc_match type = TC_MISMATCH;
-	struct tc_txd *txd;
-
-	TAILQ_FOREACH(txd, &p->tc_transmitted, list) {
-		type = tc_match_syfup(portnum(q), msg, txd);
-		switch (type) {
-		case TC_MISMATCH:
-			break;
-		case TC_SYNC_FUP:
-			break;
-		default:
-			pr_err("tc: unexpected match in tc_complete_folup_tlv!");
-			return;
-		}
-		if (type != TC_MISMATCH) {
-			break;
-		}
-	}
-
-	if (type == TC_MISMATCH) {
-		txd = tc_allocate();
-		if (!txd) {
-			port_dispatch(p, EV_FAULT_DETECTED, 0);
-			return;
-		}
-		msg_get(msg);
-		txd->msg = msg;
-		txd->residence = tmv_zero();
-		txd->ingress_port = portnum(q);
-		TAILQ_INSERT_TAIL(&p->tc_transmitted, txd, list);
-		return;
-	}
-
-	tc_send_folup_tlv(q, p, dup, txd->residence);
-
-	TAILQ_REMOVE(&p->tc_transmitted, txd, list);
-	msg_put(txd->msg);
-	tc_recycle(txd);
-}
-
 static void tc_complete(struct port *q, struct port *p,
 			struct ptp_message *msg, tmv_t residence)
 {
@@ -501,29 +416,6 @@ int tc_fwd_folup(struct port *q, struct ptp_message *msg)
 			continue;
 		}
 		tc_complete(q, p, msg, tmv_zero());
-	}
-	return 0;
-}
-
-int tc_fwd_folup_tlv(struct port *q, struct ptp_message *msg, int cnt)
-{
-	struct port *p;
-
-	clock_gettime(CLOCK_MONOTONIC, &msg->ts.host);
-
-	for (p = clock_first_port(q->clock); p; p = LIST_NEXT(p, list)) {
-		struct ptp_message *dup;
-
-		if (tc_blocked(q, p, msg)) {
-			continue;
-		}
-
-		dup = msg_duplicate(msg, cnt);
-		if (!dup)
-			return EV_NONE;
-
-		tc_complete_folup_tlv(q, p, msg, dup);
-		msg_put(dup);
 	}
 	return 0;
 }

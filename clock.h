@@ -40,8 +40,6 @@ enum clock_type {
 	CLOCK_TYPE_P2P        = 0x2000,
 	CLOCK_TYPE_E2E        = 0x1000,
 	CLOCK_TYPE_MANAGEMENT = 0x0800,
-	CLOCK_TYPE_BRIDGE     = 0x0400,
-	CLOCK_TYPE_STATION    = 0x0200,
 };
 
 /**
@@ -149,8 +147,6 @@ void clock_follow_up_info(struct clock *c, struct follow_up_info_tlv *f);
  * @return   One if the clock is free running or zero otherwise.
  */
 int clock_free_running(struct clock *c);
-
-int clock_as_device(struct clock *c);
 
 /**
  * Obtain the gmCapable flag from a clock's default data set.
@@ -363,10 +359,4 @@ void clock_check_ts(struct clock *c, uint64_t ts);
  */
 double clock_rate_ratio(struct clock *c);
 
-int wall_clock_init(struct clock *clock);
-uint64_t wall_clock_gettime(struct clock *clock);
-void wall_clock_adjtime(struct clock *clock, int64_t delta);
-void wall_clock_adjfreq(struct clock *clock, double ratio);
-uint64_t wall_clock_of_local_time(struct clock *clock, uint64_t ns_local);
-void wall_clock_synchronize(struct clock *c, tmv_t ingress, tmv_t origin);
 #endif

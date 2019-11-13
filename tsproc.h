@@ -90,7 +90,6 @@ void tsproc_set_delay(struct tsproc *tsp, tmv_t delay);
  */
 int tsproc_update_delay(struct tsproc *tsp, tmv_t *delay);
 
-int tsproc_get_delay(struct tsproc *tsp, tmv_t *delay, tmv_t *raw_delay);
 /**
  * Update offset in a time stamp processor using new measurements.
  * @param tsp    Pointer obtained via @ref tsproc_create().
