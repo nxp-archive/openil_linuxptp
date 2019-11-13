@@ -29,7 +29,17 @@
 #include "tmv.h"
 #include "transport.h"
 
+#define POW2_41 ((double)(1ULL << 41))
+
 struct ptp_message; /*forward declaration*/
+
+struct syfu_relay_info {
+	tmv_t precise_origin_ts;
+	Integer64 correction;
+	struct follow_up_info_tlv fup_info_tlv;
+	/* Auxiliary info */
+	int avail;
+};
 
 /** Opaque type. */
 struct clock;
@@ -240,6 +250,20 @@ void clock_peer_delay(struct clock *c, tmv_t ppd, tmv_t req, tmv_t rx,
 		      double nrr);
 
 /**
+ * Get the path delay as measured on a slave port.
+ * @param c           The clock instance.
+ * @return            The path delay as measured on a slave port.
+ */
+tmv_t clock_get_path_delay(struct clock *c);
+
+/**
+ * Get the neighbor rate ratio as measured on a slave port.
+ * @param c           The clock instance.
+ * @return            The neighbor rate ratio as measured on a slave port.
+ */
+double clock_get_nrr(struct clock *c);
+
+/**
  * Set clock sde
  * @param c     A pointer to a clock instance obtained with clock_create().
  * @param sde   Pass one (1) if need a decision event and zero if not.
@@ -359,4 +383,25 @@ void clock_check_ts(struct clock *c, uint64_t ts);
  */
 double clock_rate_ratio(struct clock *c);
 
+/**
+ * Prepare sync/follow_up relay.
+ * @param c     The clock instance.
+ * @param sync  The sync message.
+ * @param fup   The follow_up message.
+ */
+void clock_prepare_syfu_relay(struct clock *c, struct ptp_message *sync,
+			      struct ptp_message *fup);
+
+/**
+ * Disable sync/follow_up relay.
+ * @param c     The clock instance.
+ */
+void clock_disable_syfu_relay(struct clock *c);
+
+/**
+ * Get sync/follow_up relay information.
+ * @param c  The clock instance.
+ * @return   The sync/follow_up relay information.
+ */
+struct syfu_relay_info *clock_get_syfu_relay(struct clock *c);
 #endif
