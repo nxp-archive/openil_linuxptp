@@ -241,6 +241,19 @@ static void ts2phc_slave_destroy(struct ts2phc_slave *slave)
 	free(slave);
 }
 
+static bool ts2phc_slave_ignore(struct ts2phc_private *priv,
+				struct ts2phc_slave *slave,
+				struct timespec source_ts)
+{
+	tmv_t source_tmv = timespec_to_tmv(source_ts);
+
+	source_tmv = tmv_sub(source_tmv, priv->perout_phase);
+	source_ts = tmv_to_timespec(source_tmv);
+
+	return source_ts.tv_nsec > slave->ignore_lower &&
+	       source_ts.tv_nsec < slave->ignore_upper;
+}
+
 static enum extts_result ts2phc_slave_event(struct ts2phc_private *priv,
 					    struct ts2phc_slave *slave)
 {
@@ -269,8 +282,7 @@ static enum extts_result ts2phc_slave_event(struct ts2phc_private *priv,
 	}
 
 	if (slave->polarity == (PTP_RISING_EDGE | PTP_FALLING_EDGE) &&
-	    source_ts.tv_nsec > slave->ignore_lower &&
-	    source_ts.tv_nsec < slave->ignore_upper) {
+	    ts2phc_slave_ignore(priv, slave, source_ts)) {
 
 		pr_debug("%s SKIP extts index %u at %lld.%09u src %" PRIi64 ".%ld",
 		 slave->name, event.index, event.t.sec, event.t.nsec,

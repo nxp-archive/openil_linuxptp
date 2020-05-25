@@ -402,6 +402,40 @@ static void ts2phc_reconfigure(struct ts2phc_private *priv)
 	pr_info("selecting %s as the source clock", src->name);
 }
 
+static int ts2phc_approximate_master_tstamp(struct ts2phc_private *priv,
+					    tmv_t *master_tmv)
+{
+	struct timespec master_ts;
+	tmv_t tmv;
+	int err;
+
+	err = ts2phc_master_getppstime(priv->master, &master_ts);
+	if (err < 0) {
+		pr_err("master ts not valid");
+		return err;
+	}
+
+	tmv = timespec_to_tmv(master_ts);
+	tmv = tmv_sub(tmv, priv->perout_phase);
+	master_ts = tmv_to_timespec(tmv);
+
+	/*
+	 * As long as the kernel doesn't support a proper API for reporting
+	 * a precise perout timestamp, we'll have to use this crude
+	 * approximation.
+	 */
+	if (master_ts.tv_nsec > NS_PER_SEC / 2)
+		master_ts.tv_sec++;
+	master_ts.tv_nsec = 0;
+
+	tmv = timespec_to_tmv(master_ts);
+	tmv = tmv_add(tmv, priv->perout_phase);
+
+	*master_tmv = tmv;
+
+	return 0;
+}
+
 static void ts2phc_synchronize_clocks(struct ts2phc_private *priv, int autocfg)
 {
 	tmv_t source_tmv;
@@ -420,18 +454,9 @@ static void ts2phc_synchronize_clocks(struct ts2phc_private *priv, int autocfg)
 			return;
 		}
 	} else {
-		struct timespec source_ts;
-
-		err = ts2phc_master_getppstime(priv->master, &source_ts);
-		if (err < 0) {
-			pr_err("source ts not valid");
+		err = ts2phc_approximate_master_tstamp(priv, &source_tmv);
+		if (err < 0)
 			return;
-		}
-		if (source_ts.tv_nsec > NS_PER_SEC / 2)
-			source_ts.tv_sec++;
-		source_ts.tv_nsec = 0;
-
-		source_tmv = timespec_to_tmv(source_ts);
 	}
 
 	LIST_FOREACH(c, &priv->clocks, list) {
@@ -480,7 +505,7 @@ static void ts2phc_synchronize_clocks(struct ts2phc_private *priv, int autocfg)
 static int ts2phc_collect_master_tstamp(struct ts2phc_private *priv)
 {
 	struct clock *master_clock;
-	struct timespec master_ts;
+	tmv_t master_tmv;
 	int err;
 
 	master_clock = ts2phc_master_get_clock(priv->master);
@@ -493,22 +518,11 @@ static int ts2phc_collect_master_tstamp(struct ts2phc_private *priv)
 	if (!master_clock)
 		return 0;
 
-	err = ts2phc_master_getppstime(priv->master, &master_ts);
-	if (err < 0) {
-		pr_err("source ts not valid");
+	err = ts2phc_approximate_master_tstamp(priv, &master_tmv);
+	if (err < 0)
 		return err;
-	}
 
-	/*
-	 * As long as the kernel doesn't support a proper API for reporting
-	 * a precise perout timestamp, we'll have to use this crude
-	 * approximation.
-	 */
-	if (master_ts.tv_nsec > NS_PER_SEC / 2)
-		master_ts.tv_sec++;
-	master_ts.tv_nsec = 0;
-
-	clock_add_tstamp(master_clock, timespec_to_tmv(master_ts));
+	clock_add_tstamp(master_clock, master_tmv);
 
 	return 0;
 }
@@ -657,13 +671,29 @@ int main(int argc, char *argv[])
 	}
 
 	STAILQ_FOREACH(iface, &cfg->interfaces, list) {
-		if (1 == config_get_int(cfg, interface_name(iface), "ts2phc.master")) {
+		const char *dev = interface_name(iface);
+
+		if (1 == config_get_int(cfg, dev, "ts2phc.master")) {
+			int perout_phase;
+
 			if (pps_source) {
 				fprintf(stderr, "too many PPS sources\n");
 				ts2phc_cleanup(&priv);
 				return -1;
 			}
-			pps_source = interface_name(iface);
+			pps_source = dev;
+			perout_phase = config_get_int(cfg, dev,
+						      "ts2phc.perout_phase");
+			/*
+			 * We use a default value of -1 to distinguish whether
+			 * to use the PTP_PEROUT_PHASE API or not. But if we
+			 * don't use that (and therefore we use absolute start
+			 * time), the phase is still zero, by our application's
+			 * convention.
+			 */
+			if (perout_phase < 0)
+				perout_phase = 0;
+			priv.perout_phase = nanoseconds_to_tmv(perout_phase);
 		} else {
 			if (ts2phc_slave_add(&priv, interface_name(iface))) {
 				fprintf(stderr, "failed to add slave\n");

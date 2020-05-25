@@ -167,6 +167,11 @@ specified, then the given remote connection will be used in preference
 to the configured serial port.
 The default is "/dev/ttyS0".
 .TP
+.B ts2phc.perout_phase
+Configures the offset between the beginning of the second and the PPS
+master's rising edge. Available only for a PHC master. The supported
+range is 0 to 999999999 nanoseconds. The default is 0 nanoseconds.
+.TP
 .B ts2phc.pulsewidth
 The expected pulse width of the external PPS signal in nanoseconds.
 When 'ts2phc.extts_polarity' is "both", the given pulse width is used

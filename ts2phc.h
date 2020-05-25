@@ -44,6 +44,7 @@ struct ts2phc_private {
 	STAILQ_HEAD(slave_ifaces_head, ts2phc_slave) slaves;
 	unsigned int n_slaves;
 	struct ts2phc_slave_array *polling_array;
+	tmv_t perout_phase;
 	struct config *cfg;
 	struct pmc_node node;
 	int state_changed;
