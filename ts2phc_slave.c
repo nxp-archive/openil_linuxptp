@@ -21,8 +21,7 @@
 #include "phc.h"
 #include "print.h"
 #include "servo.h"
-#include "ts2phc_master.h"
-#include "ts2phc_slave.h"
+#include "ts2phc.h"
 #include "util.h"
 
 #define NS_PER_SEC		1000000000LL
@@ -47,7 +46,7 @@ struct ts2phc_slave {
 struct ts2phc_slave_array {
 	struct ts2phc_slave **slave;
 	struct pollfd *pfd;
-} polling_array;
+};
 
 struct ts2phc_source_timestamp {
 	struct timespec ts;
@@ -65,49 +64,55 @@ static enum extts_result ts2phc_slave_offset(struct ts2phc_slave *slave,
 					     int64_t *offset,
 					     uint64_t *local_ts);
 
-static STAILQ_HEAD(slave_ifaces_head, ts2phc_slave) ts2phc_slaves =
-	STAILQ_HEAD_INITIALIZER(ts2phc_slaves);
-
-static unsigned int ts2phc_n_slaves;
-
-static int ts2phc_slave_array_create(void)
+static int ts2phc_slave_array_create(struct ts2phc_private *priv)
 {
+	struct ts2phc_slave_array *polling_array;
 	struct ts2phc_slave *slave;
 	unsigned int i;
 
-	if (polling_array.slave) {
-		return 0;
-	}
-	polling_array.slave = malloc(ts2phc_n_slaves * sizeof(*polling_array.slave));
-	if (!polling_array.slave) {
+	polling_array = malloc(sizeof(*polling_array));
+	if (!polling_array) {
 		pr_err("low memory");
 		return -1;
 	}
-	polling_array.pfd = malloc(ts2phc_n_slaves * sizeof(*polling_array.pfd));
-	if (!polling_array.pfd) {
+
+	polling_array->slave = malloc(priv->n_slaves *
+				      sizeof(*polling_array->slave));
+	if (!polling_array->slave) {
 		pr_err("low memory");
-		free(polling_array.slave);
-		polling_array.slave = NULL;
+		return -1;
+	}
+	polling_array->pfd = malloc(priv->n_slaves *
+				    sizeof(*polling_array->pfd));
+	if (!polling_array->pfd) {
+		pr_err("low memory");
+		free(polling_array->slave);
+		polling_array->slave = NULL;
 		return -1;
 	}
 	i = 0;
-	STAILQ_FOREACH(slave, &ts2phc_slaves, list) {
-		polling_array.slave[i] = slave;
+	STAILQ_FOREACH(slave, &priv->slaves, list) {
+		polling_array->slave[i] = slave;
 		i++;
 	}
-	for (i = 0; i < ts2phc_n_slaves; i++) {
-		polling_array.pfd[i].events = POLLIN | POLLPRI;
-		polling_array.pfd[i].fd = polling_array.slave[i]->fd;
+	for (i = 0; i < priv->n_slaves; i++) {
+		polling_array->pfd[i].events = POLLIN | POLLPRI;
+		polling_array->pfd[i].fd = polling_array->slave[i]->fd;
 	}
+
+	priv->polling_array = polling_array;
+
 	return 0;
 }
 
-static void ts2phc_slave_array_destroy(void)
+static void ts2phc_slave_array_destroy(struct ts2phc_private *priv)
 {
-	free(polling_array.slave);
-	free(polling_array.pfd);
-	polling_array.slave = NULL;
-	polling_array.pfd = NULL;
+	struct ts2phc_slave_array *polling_array = priv->polling_array;
+
+	free(polling_array->slave);
+	free(polling_array->pfd);
+	polling_array->slave = NULL;
+	polling_array->pfd = NULL;
 }
 
 static int ts2phc_slave_clear_fifo(struct ts2phc_slave *slave)
@@ -143,9 +148,10 @@ static int ts2phc_slave_clear_fifo(struct ts2phc_slave *slave)
 	return 0;
 }
 
-static struct ts2phc_slave *ts2phc_slave_create(struct config *cfg, const char *device)
+static struct ts2phc_slave *ts2phc_slave_create(struct ts2phc_private *priv,
+						const char *device)
 {
-	enum servo_type servo = config_get_int(cfg, NULL, "clock_servo");
+	enum servo_type servo = config_get_int(priv->cfg, NULL, "clock_servo");
 	int err, fadj, junk, max_adj, pulsewidth;
 	struct ptp_extts_request extts;
 	struct ts2phc_slave *slave;
@@ -161,13 +167,18 @@ static struct ts2phc_slave *ts2phc_slave_create(struct config *cfg, const char *
 		free(slave);
 		return NULL;
 	}
-	slave->pin_desc.index = config_get_int(cfg, device, "ts2phc.pin_index");
+	slave->pin_desc.index = config_get_int(priv->cfg, device,
+					       "ts2phc.pin_index");
 	slave->pin_desc.func = PTP_PF_EXTTS;
-	slave->pin_desc.chan = config_get_int(cfg, device, "ts2phc.channel");
-	slave->polarity = config_get_int(cfg, device, "ts2phc.extts_polarity");
-	slave->correction = config_get_int(cfg, device, "ts2phc.extts_correction");
+	slave->pin_desc.chan = config_get_int(priv->cfg, device,
+					      "ts2phc.channel");
+	slave->polarity = config_get_int(priv->cfg, device,
+					 "ts2phc.extts_polarity");
+	slave->correction = config_get_int(priv->cfg, device,
+					   "ts2phc.extts_correction");
 
-	pulsewidth = config_get_int(cfg, device, "ts2phc.pulsewidth");
+	pulsewidth = config_get_int(priv->cfg, device,
+				    "ts2phc.pulsewidth");
 	pulsewidth /= 2;
 	slave->ignore_upper = 1000000000 - pulsewidth;
 	slave->ignore_lower = pulsewidth;
@@ -177,7 +188,7 @@ static struct ts2phc_slave *ts2phc_slave_create(struct config *cfg, const char *
 		pr_err("failed to open clock");
 		goto no_posix_clock;
 	}
-	slave->no_adj = config_get_int(cfg, NULL, "free_running");
+	slave->no_adj = config_get_int(priv->cfg, NULL, "free_running");
 	slave->fd = CLOCKID_TO_FD(slave->clk);
 
 	pr_debug("PHC slave %s has ptp index %d", device, junk);
@@ -190,7 +201,7 @@ static struct ts2phc_slave *ts2phc_slave_create(struct config *cfg, const char *
 
 	max_adj = phc_max_adj(slave->clk);
 
-	slave->servo = servo_create(cfg, servo, -fadj, max_adj, 0);
+	slave->servo = servo_create(priv->cfg, servo, -fadj, max_adj, 0);
 	if (!slave->servo) {
 		pr_err("failed to create servo");
 		goto no_servo;
@@ -346,28 +357,28 @@ static enum extts_result ts2phc_slave_offset(struct ts2phc_slave *slave,
 
 /* public methods */
 
-int ts2phc_slave_add(struct config *cfg, const char *name)
+int ts2phc_slave_add(struct ts2phc_private *priv, const char *name)
 {
 	struct ts2phc_slave *slave;
 
 	/* Create each interface only once. */
-	STAILQ_FOREACH(slave, &ts2phc_slaves, list) {
+	STAILQ_FOREACH(slave, &priv->slaves, list) {
 		if (0 == strcmp(name, slave->name)) {
 			return 0;
 		}
 	}
-	slave = ts2phc_slave_create(cfg, name);
+	slave = ts2phc_slave_create(priv, name);
 	if (!slave) {
 		pr_err("failed to create slave");
 		return -1;
 	}
-	STAILQ_INSERT_TAIL(&ts2phc_slaves, slave, list);
-	ts2phc_n_slaves++;
+	STAILQ_INSERT_TAIL(&priv->slaves, slave, list);
+	priv->n_slaves++;
 
 	return 0;
 }
 
-int ts2phc_slave_arm(void)
+int ts2phc_slave_arm(struct ts2phc_private *priv)
 {
 	struct ptp_extts_request extts;
 	struct ts2phc_slave *slave;
@@ -375,7 +386,7 @@ int ts2phc_slave_arm(void)
 
 	memset(&extts, 0, sizeof(extts));
 
-	STAILQ_FOREACH(slave, &ts2phc_slaves, list) {
+	STAILQ_FOREACH(slave, &priv->slaves, list) {
 		extts.index = slave->pin_desc.chan;
 		extts.flags = slave->polarity | PTP_ENABLE_FEATURE;
 		err = ioctl(slave->fd, PTP_EXTTS_REQUEST2, &extts);
@@ -387,29 +398,38 @@ int ts2phc_slave_arm(void)
 	return 0;
 }
 
-void ts2phc_slave_cleanup(void)
+int ts2phc_slaves_init(struct ts2phc_private *priv)
+{
+	int err;
+
+	err = ts2phc_slave_array_create(priv);
+	if (err)
+		return err;
+
+	return ts2phc_slave_arm(priv);
+}
+
+void ts2phc_slave_cleanup(struct ts2phc_private *priv)
 {
 	struct ts2phc_slave *slave;
 
-	ts2phc_slave_array_destroy();
+	ts2phc_slave_array_destroy(priv);
 
-	while ((slave = STAILQ_FIRST(&ts2phc_slaves))) {
-		STAILQ_REMOVE_HEAD(&ts2phc_slaves, list);
+	while ((slave = STAILQ_FIRST(&priv->slaves))) {
+		STAILQ_REMOVE_HEAD(&priv->slaves, list);
 		ts2phc_slave_destroy(slave);
-		ts2phc_n_slaves--;
+		priv->n_slaves--;
 	}
 }
 
-int ts2phc_slave_poll(struct ts2phc_master *master)
+int ts2phc_slave_poll(struct ts2phc_private *priv)
 {
+	struct ts2phc_slave_array *polling_array = priv->polling_array;
 	struct ts2phc_source_timestamp source_ts;
 	unsigned int i;
 	int cnt, err;
 
-	if (ts2phc_slave_array_create()) {
-		return -1;
-	}
-	cnt = poll(polling_array.pfd, ts2phc_n_slaves, 2000);
+	cnt = poll(polling_array->pfd, priv->n_slaves, 2000);
 	if (cnt < 0) {
 		if (EINTR == errno) {
 			return 0;
@@ -422,12 +442,12 @@ int ts2phc_slave_poll(struct ts2phc_master *master)
 		return 0;
 	}
 
-	err = ts2phc_master_getppstime(master, &source_ts.ts);
+	err = ts2phc_master_getppstime(priv->master, &source_ts.ts);
 	source_ts.valid = err ? false : true;
 
-	for (i = 0; i < ts2phc_n_slaves; i++) {
-		if (polling_array.pfd[i].revents & (POLLIN|POLLPRI)) {
-			ts2phc_slave_event(polling_array.slave[i], source_ts);
+	for (i = 0; i < priv->n_slaves; i++) {
+		if (polling_array->pfd[i].revents & (POLLIN|POLLPRI)) {
+			ts2phc_slave_event(polling_array->slave[i], source_ts);
 		}
 	}
 	return 0;

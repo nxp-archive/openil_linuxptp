@@ -7,14 +7,14 @@
 #ifndef HAVE_TS2PHC_SLAVE_H
 #define HAVE_TS2PHC_SLAVE_H
 
-#include "ts2phc_master.h"
+#include "ts2phc.h"
 
-int ts2phc_slave_add(struct config *cfg, const char *name);
+int ts2phc_slave_add(struct ts2phc_private *priv, const char *name);
 
-int ts2phc_slave_arm(void);
+int ts2phc_slaves_init(struct ts2phc_private *priv);
 
-void ts2phc_slave_cleanup(void);
+void ts2phc_slave_cleanup(struct ts2phc_private *priv);
 
-int ts2phc_slave_poll(struct ts2phc_master *master);
+int ts2phc_slave_poll(struct ts2phc_private *priv);
 
 #endif
