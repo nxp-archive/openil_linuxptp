@@ -264,8 +264,8 @@ static int ts2phc_slave_event(struct ts2phc_slave *slave,
 	adj = servo_sample(slave->clock->servo, offset, extts_ts,
 			   SAMPLE_WEIGHT, &slave->clock->servo_state);
 
-	pr_debug("%s master offset %10" PRId64 " s%d freq %+7.0f",
-		 slave->name, offset, slave->clock->servo_state, adj);
+	pr_info("%s master offset %10" PRId64 " s%d freq %+7.0f",
+		slave->name, offset, slave->clock->servo_state, adj);
 
 	switch (slave->clock->servo_state) {
 	case SERVO_UNLOCKED:
