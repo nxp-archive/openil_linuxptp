@@ -26,21 +26,17 @@
 
 #define NS_PER_SEC		1000000000LL
 #define SAMPLE_WEIGHT		1.0
-#define SERVO_SYNC_INTERVAL	1.0
 
 struct ts2phc_slave {
 	char *name;
 	STAILQ_ENTRY(ts2phc_slave) list;
 	struct ptp_pin_desc pin_desc;
-	enum servo_state state;
 	unsigned int polarity;
 	int32_t correction;
 	uint32_t ignore_lower;
 	uint32_t ignore_upper;
-	struct servo *servo;
-	clockid_t clk;
+	struct clock *clock;
 	int no_adj;
-	int fd;
 };
 
 struct ts2phc_slave_array {
@@ -96,8 +92,10 @@ static int ts2phc_slave_array_create(struct ts2phc_private *priv)
 		i++;
 	}
 	for (i = 0; i < priv->n_slaves; i++) {
+		struct ts2phc_slave *slave = polling_array->slave[i];
+
 		polling_array->pfd[i].events = POLLIN | POLLPRI;
-		polling_array->pfd[i].fd = polling_array->slave[i]->fd;
+		polling_array->pfd[i].fd = CLOCKID_TO_FD(slave->clock->clkid);
 	}
 
 	priv->polling_array = polling_array;
@@ -111,15 +109,15 @@ static void ts2phc_slave_array_destroy(struct ts2phc_private *priv)
 
 	free(polling_array->slave);
 	free(polling_array->pfd);
-	polling_array->slave = NULL;
-	polling_array->pfd = NULL;
+	free(polling_array);
+	priv->polling_array = NULL;
 }
 
 static int ts2phc_slave_clear_fifo(struct ts2phc_slave *slave)
 {
 	struct pollfd pfd = {
 		.events = POLLIN | POLLPRI,
-		.fd = slave->fd,
+		.fd = CLOCKID_TO_FD(slave->clock->clkid),
 	};
 	struct ptp_extts_event event;
 	int cnt, size;
@@ -151,10 +149,9 @@ static int ts2phc_slave_clear_fifo(struct ts2phc_slave *slave)
 static struct ts2phc_slave *ts2phc_slave_create(struct ts2phc_private *priv,
 						const char *device)
 {
-	enum servo_type servo = config_get_int(priv->cfg, NULL, "clock_servo");
-	int err, fadj, junk, max_adj, pulsewidth;
 	struct ptp_extts_request extts;
 	struct ts2phc_slave *slave;
+	int err, pulsewidth;
 
 	slave = calloc(1, sizeof(*slave));
 	if (!slave) {
@@ -183,33 +180,17 @@ static struct ts2phc_slave *ts2phc_slave_create(struct ts2phc_private *priv,
 	slave->ignore_upper = 1000000000 - pulsewidth;
 	slave->ignore_lower = pulsewidth;
 
-	slave->clk = posix_clock_open(device, &junk);
-	if (slave->clk == CLOCK_INVALID) {
+	slave->clock = clock_add(priv, device);
+	if (!slave->clock) {
 		pr_err("failed to open clock");
 		goto no_posix_clock;
 	}
-	slave->no_adj = config_get_int(priv->cfg, NULL, "free_running");
-	slave->fd = CLOCKID_TO_FD(slave->clk);
 
-	pr_debug("PHC slave %s has ptp index %d", device, junk);
+	pr_debug("PHC slave %s has ptp index %d", device,
+		 slave->clock->phc_index);
 
-	fadj = (int) clockadj_get_freq(slave->clk);
-	/* Due to a bug in older kernels, the reading may silently fail
-	   and return 0. Set the frequency back to make sure fadj is
-	   the actual frequency of the clock. */
-	clockadj_set_freq(slave->clk, fadj);
-
-	max_adj = phc_max_adj(slave->clk);
-
-	slave->servo = servo_create(priv->cfg, servo, -fadj, max_adj, 0);
-	if (!slave->servo) {
-		pr_err("failed to create servo");
-		goto no_servo;
-	}
-	servo_sync_interval(slave->servo, SERVO_SYNC_INTERVAL);
-
-	if (phc_number_pins(slave->clk) > 0) {
-		err = phc_pin_setfunc(slave->clk, &slave->pin_desc);
+	if (phc_number_pins(slave->clock->clkid) > 0) {
+		err = phc_pin_setfunc(slave->clock->clkid, &slave->pin_desc);
 		if (err < 0) {
 			pr_err("PTP_PIN_SETFUNC request failed");
 			goto no_pin_func;
@@ -223,7 +204,8 @@ static struct ts2phc_slave *ts2phc_slave_create(struct ts2phc_private *priv,
 	memset(&extts, 0, sizeof(extts));
 	extts.index = slave->pin_desc.chan;
 	extts.flags = 0;
-	if (ioctl(slave->fd, PTP_EXTTS_REQUEST2, &extts)) {
+	if (ioctl(CLOCKID_TO_FD(slave->clock->clkid), PTP_EXTTS_REQUEST2,
+		  &extts)) {
 		pr_err(PTP_EXTTS_REQUEST_FAILED);
 	}
 	if (ts2phc_slave_clear_fifo(slave)) {
@@ -233,9 +215,7 @@ static struct ts2phc_slave *ts2phc_slave_create(struct ts2phc_private *priv,
 	return slave;
 no_ext_ts:
 no_pin_func:
-	servo_destroy(slave->servo);
-no_servo:
-	posix_clock_close(slave->clk);
+	clock_destroy(slave->clock);
 no_posix_clock:
 	free(slave->name);
 	free(slave);
@@ -249,11 +229,11 @@ static void ts2phc_slave_destroy(struct ts2phc_slave *slave)
 	memset(&extts, 0, sizeof(extts));
 	extts.index = slave->pin_desc.chan;
 	extts.flags = 0;
-	if (ioctl(slave->fd, PTP_EXTTS_REQUEST2, &extts)) {
+	if (ioctl(CLOCKID_TO_FD(slave->clock->clkid), PTP_EXTTS_REQUEST2,
+		  &extts)) {
 		pr_err(PTP_EXTTS_REQUEST_FAILED);
 	}
-	servo_destroy(slave->servo);
-	posix_clock_close(slave->clk);
+	clock_destroy(slave->clock);
 	free(slave->name);
 	free(slave);
 }
@@ -281,27 +261,22 @@ static int ts2phc_slave_event(struct ts2phc_slave *slave,
 		return 0;
 	}
 
-	if (!source_ts.valid) {
-		pr_debug("%s ignoring invalid master time stamp", slave->name);
-		return 0;
-	}
-
-	adj = servo_sample(slave->servo, offset, extts_ts,
-			   SAMPLE_WEIGHT, &slave->state);
+	adj = servo_sample(slave->clock->servo, offset, extts_ts,
+			   SAMPLE_WEIGHT, &slave->clock->servo_state);
 
 	pr_debug("%s master offset %10" PRId64 " s%d freq %+7.0f",
-		 slave->name, offset, slave->state, adj);
+		 slave->name, offset, slave->clock->servo_state, adj);
 
-	switch (slave->state) {
+	switch (slave->clock->servo_state) {
 	case SERVO_UNLOCKED:
 		break;
 	case SERVO_JUMP:
-		clockadj_set_freq(slave->clk, -adj);
-		clockadj_step(slave->clk, -offset);
+		clockadj_set_freq(slave->clock->clkid, -adj);
+		clockadj_step(slave->clock->clkid, -offset);
 		break;
 	case SERVO_LOCKED:
 	case SERVO_LOCKED_STABLE:
-		clockadj_set_freq(slave->clk, -adj);
+		clockadj_set_freq(slave->clock->clkid, -adj);
 		break;
 	}
 	return 0;
@@ -317,7 +292,7 @@ static enum extts_result ts2phc_slave_offset(struct ts2phc_slave *slave,
 	uint64_t event_ns, source_ns;
 	int cnt;
 
-	cnt = read(slave->fd, &event, sizeof(event));
+	cnt = read(CLOCKID_TO_FD(slave->clock->clkid), &event, sizeof(event));
 	if (cnt != sizeof(event)) {
 		pr_err("read extts event failed: %m");
 		return EXTTS_ERROR;
@@ -389,7 +364,8 @@ int ts2phc_slave_arm(struct ts2phc_private *priv)
 	STAILQ_FOREACH(slave, &priv->slaves, list) {
 		extts.index = slave->pin_desc.chan;
 		extts.flags = slave->polarity | PTP_ENABLE_FEATURE;
-		err = ioctl(slave->fd, PTP_EXTTS_REQUEST2, &extts);
+		err = ioctl(CLOCKID_TO_FD(slave->clock->clkid),
+			    PTP_EXTTS_REQUEST2, &extts);
 		if (err < 0) {
 			pr_err(PTP_EXTTS_REQUEST_FAILED);
 			return -1;
@@ -444,6 +420,11 @@ int ts2phc_slave_poll(struct ts2phc_private *priv)
 
 	err = ts2phc_master_getppstime(priv->master, &source_ts.ts);
 	source_ts.valid = err ? false : true;
+
+	if (!source_ts.valid) {
+		pr_debug("ignoring invalid master time stamp");
+		return 0;
+	}
 
 	for (i = 0; i < priv->n_slaves; i++) {
 		if (polling_array->pfd[i].revents & (POLLIN|POLLPRI)) {

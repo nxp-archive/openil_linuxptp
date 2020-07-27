@@ -7,9 +7,14 @@
  * @note SPDX-License-Identifier: GPL-2.0+
  */
 #include <stdlib.h>
+#include <net/if.h>
+#include <sys/types.h>
+#include <unistd.h>
 
+#include "clockadj.h"
 #include "config.h"
 #include "interface.h"
+#include "phc.h"
 #include "print.h"
 #include "ts2phc.h"
 #include "version.h"
@@ -25,6 +30,77 @@ static void ts2phc_cleanup(struct ts2phc_private *priv)
 		ts2phc_master_destroy(priv->master);
 	if (priv->cfg)
 		config_destroy(priv->cfg);
+}
+
+struct servo *servo_add(struct ts2phc_private *priv, struct clock *clock)
+{
+	enum servo_type type = config_get_int(priv->cfg, NULL, "clock_servo");
+	struct servo *servo;
+	int fadj, max_adj;
+
+	fadj = (int) clockadj_get_freq(clock->clkid);
+	/* Due to a bug in older kernels, the reading may silently fail
+	   and return 0. Set the frequency back to make sure fadj is
+	   the actual frequency of the clock. */
+	clockadj_set_freq(clock->clkid, fadj);
+
+	max_adj = phc_max_adj(clock->clkid);
+
+	servo = servo_create(priv->cfg, type, -fadj, max_adj, 0);
+	if (!servo)
+		return NULL;
+
+	servo_sync_interval(servo, SERVO_SYNC_INTERVAL);
+
+	return servo;
+}
+
+struct clock *clock_add(struct ts2phc_private *priv, const char *device)
+{
+	clockid_t clkid = CLOCK_INVALID;
+	int phc_index = -1;
+	struct clock *c;
+	int err;
+
+	clkid = posix_clock_open(device, &phc_index);
+	if (clkid == CLOCK_INVALID)
+		return NULL;
+
+	LIST_FOREACH(c, &priv->clocks, list) {
+		if (c->phc_index == phc_index) {
+			/* Already have the clock, don't add it again */
+			posix_clock_close(clkid);
+			return c;
+		}
+	}
+
+	c = calloc(1, sizeof(*c));
+	if (!c) {
+		pr_err("failed to allocate memory for a clock");
+		return NULL;
+	}
+	c->clkid = clkid;
+	c->phc_index = phc_index;
+	c->servo_state = SERVO_UNLOCKED;
+	c->servo = servo_add(priv, c);
+	c->no_adj = config_get_int(priv->cfg, NULL, "free_running");
+	err = asprintf(&c->name, "/dev/ptp%d", phc_index);
+	if (err < 0) {
+		free(c);
+		posix_clock_close(clkid);
+		return NULL;
+	}
+
+	LIST_INSERT_HEAD(&priv->clocks, c, list);
+	return c;
+}
+
+void clock_destroy(struct clock *c)
+{
+	servo_destroy(c->servo);
+	posix_clock_close(c->clkid);
+	free(c->name);
+	free(c);
 }
 
 static void usage(char *progname)
