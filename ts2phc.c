@@ -13,6 +13,7 @@
 
 #include "clockadj.h"
 #include "config.h"
+#include "contain.h"
 #include "interface.h"
 #include "phc.h"
 #include "print.h"
@@ -25,11 +26,108 @@ struct interface {
 
 static void ts2phc_cleanup(struct ts2phc_private *priv)
 {
+	struct port *p, *tmp;
+
 	ts2phc_slave_cleanup(priv);
 	if (priv->master)
 		ts2phc_master_destroy(priv->master);
 	if (priv->cfg)
 		config_destroy(priv->cfg);
+
+	close_pmc_node(&priv->node);
+
+	/*
+	 * Clocks are destroyed by the cleanup methods of the individual
+	 * master and slave PHC modules.
+	 */
+	LIST_FOREACH_SAFE(p, &priv->ports, list, tmp)
+		free(p);
+
+	msg_cleanup();
+}
+
+/* FIXME: Copied from phc2sys */
+static int normalize_state(int state)
+{
+	if (state != PS_MASTER && state != PS_SLAVE &&
+	    state != PS_PRE_MASTER && state != PS_UNCALIBRATED) {
+		/* treat any other state as "not a master nor a slave" */
+		state = PS_DISABLED;
+	}
+	return state;
+}
+
+/* FIXME: Copied from phc2sys */
+static struct port *port_get(struct ts2phc_private *priv, unsigned int number)
+{
+	struct port *p;
+
+	LIST_FOREACH(p, &priv->ports, list) {
+		if (p->number == number)
+			return p;
+	}
+	return NULL;
+}
+
+/* FIXME: Copied from phc2sys */
+static int clock_compute_state(struct ts2phc_private *priv,
+			       struct clock *clock)
+{
+	int state = PS_DISABLED;
+	struct port *p;
+
+	LIST_FOREACH(p, &priv->ports, list) {
+		if (p->clock != clock)
+			continue;
+		/* PS_SLAVE takes the highest precedence, PS_UNCALIBRATED
+		 * after that, PS_MASTER is third, PS_PRE_MASTER fourth and
+		 * all of that overrides PS_DISABLED, which corresponds
+		 * nicely with the numerical values */
+		if (p->state > state)
+			state = p->state;
+	}
+	return state;
+}
+
+#define node_to_ts2phc(node) \
+	container_of(node, struct ts2phc_private, node)
+
+static int ts2phc_recv_subscribed(struct pmc_node *node,
+				  struct ptp_message *msg, int excluded)
+{
+	struct ts2phc_private *priv = node_to_ts2phc(node);
+	int mgt_id, state;
+	struct portDS *pds;
+	struct port *port;
+	struct clock *clock;
+
+	mgt_id = get_mgt_id(msg);
+	if (mgt_id == excluded)
+		return 0;
+	switch (mgt_id) {
+	case TLV_PORT_DATA_SET:
+		pds = get_mgt_data(msg);
+		port = port_get(priv, pds->portIdentity.portNumber);
+		if (!port) {
+			pr_info("received data for unknown port %s",
+				pid2str(&pds->portIdentity));
+			return 1;
+		}
+		state = normalize_state(pds->portState);
+		if (port->state != state) {
+			pr_info("port %s changed state",
+				pid2str(&pds->portIdentity));
+			port->state = state;
+			clock = port->clock;
+			state = clock_compute_state(priv, clock);
+			if (clock->state != state || clock->new_state) {
+				clock->new_state = state;
+				priv->state_changed = 1;
+			}
+		}
+		return 1;
+	}
+	return 0;
 }
 
 struct servo *servo_add(struct ts2phc_private *priv, struct clock *clock)
@@ -95,6 +193,7 @@ struct clock *clock_add(struct ts2phc_private *priv, const char *device)
 	return c;
 }
 
+
 void clock_destroy(struct clock *c)
 {
 	servo_destroy(c->servo);
@@ -103,11 +202,112 @@ void clock_destroy(struct clock *c)
 	free(c);
 }
 
+/* FIXME: Copied from phc2sys */
+static struct port *port_add(struct ts2phc_private *priv, unsigned int number,
+			     char *device)
+{
+	struct clock *c = NULL;
+	struct port *p, *tmp;
+
+	p = port_get(priv, number);
+	if (p)
+		return p;
+	/* port is a new one, look whether we have the device already on
+	 * a different port */
+	LIST_FOREACH(tmp, &priv->ports, list) {
+		if (tmp->number == number) {
+			c = tmp->clock;
+			break;
+		}
+	}
+	if (!c) {
+		c = clock_add(priv, device);
+		if (!c)
+			return NULL;
+	}
+	p = malloc(sizeof(*p));
+	if (!p) {
+		pr_err("failed to allocate memory for a port");
+		clock_destroy(c);
+		return NULL;
+	}
+	p->number = number;
+	p->clock = c;
+	LIST_INSERT_HEAD(&priv->ports, p, list);
+	return p;
+}
+
+static int auto_init_ports(struct ts2phc_private *priv)
+{
+	int state, timestamping;
+	int number_ports, res;
+	char iface[IFNAMSIZ];
+	struct clock *clock;
+	struct port *port;
+	unsigned int i;
+
+	while (1) {
+		if (!is_running())
+			return -1;
+		res = run_pmc_clock_identity(&priv->node, 1000);
+		if (res < 0)
+			return -1;
+		if (res > 0)
+			break;
+		/* res == 0, timeout */
+		pr_notice("Waiting for ptp4l...");
+	}
+
+	number_ports = run_pmc_get_number_ports(&priv->node, 1000);
+	if (number_ports <= 0) {
+		pr_err("failed to get number of ports");
+		return -1;
+	}
+
+	res = run_pmc_subscribe(&priv->node, 1000);
+	if (res <= 0) {
+		pr_err("failed to subscribe");
+		return -1;
+	}
+
+	for (i = 1; i <= number_ports; i++) {
+		res = run_pmc_port_properties(&priv->node, 1000, i, &state,
+					      &timestamping, iface);
+		if (res == -1) {
+			/* port does not exist, ignore the port */
+			continue;
+		}
+		if (res <= 0) {
+			pr_err("failed to get port properties");
+			return -1;
+		}
+		if (timestamping == TS_SOFTWARE) {
+			/* ignore ports with software time stamping */
+			continue;
+		}
+		port = port_add(priv, i, iface);
+		if (!port)
+			return -1;
+		port->state = normalize_state(state);
+	}
+	if (LIST_EMPTY(&priv->clocks)) {
+		pr_err("no suitable ports available");
+		return -1;
+	}
+	LIST_FOREACH(clock, &priv->clocks, list) {
+		clock->new_state = clock_compute_state(priv, clock);
+	}
+	priv->state_changed = 1;
+
+	return 0;
+}
+
 static void usage(char *progname)
 {
 	fprintf(stderr,
 		"\n"
 		"usage: %s [options]\n\n"
+		" -a             turn on autoconfiguration\n"
 		" -c [dev|name]  phc slave clock (like /dev/ptp0 or eth0)\n"
 		"                (may be specified multiple times)\n"
 		" -f [file]      read configuration from 'file'\n"
@@ -129,6 +329,7 @@ static void usage(char *progname)
 int main(int argc, char *argv[])
 {
 	int c, err = 0, have_slave = 0, index, print_level;
+	char uds_local[MAX_IFNAME_SIZE + 1];
 	enum ts2phc_master_type pps_type;
 	struct ts2phc_private priv = {0};
 	char *config = NULL, *progname;
@@ -136,6 +337,7 @@ int main(int argc, char *argv[])
 	struct config *cfg = NULL;
 	struct interface *iface;
 	struct option *opts;
+	int autocfg = 0;
 
 	handle_term_signals();
 
@@ -150,13 +352,16 @@ int main(int argc, char *argv[])
 	/* Process the command line arguments. */
 	progname = strrchr(argv[0], '/');
 	progname = progname ? 1 + progname : argv[0];
-	while (EOF != (c = getopt_long(argc, argv, "c:f:hi:l:mqs:v", opts, &index))) {
+	while (EOF != (c = getopt_long(argc, argv, "ac:f:hi:l:mqs:v", opts, &index))) {
 		switch (c) {
 		case 0:
 			if (config_parse_option(cfg, opts[index].name, optarg)) {
 				ts2phc_cleanup(&priv);
 				return -1;
 			}
+			break;
+		case 'a':
+			autocfg = 1;
 			break;
 		case 'c':
 			if (!config_create_interface(optarg, cfg)) {
@@ -222,6 +427,23 @@ int main(int argc, char *argv[])
 
 	STAILQ_INIT(&priv.slaves);
 	priv.cfg = cfg;
+
+	snprintf(uds_local, sizeof(uds_local), "/var/run/ts2phc.%d",
+		 getpid());
+
+	if (autocfg) {
+		err = init_pmc_node(cfg, &priv.node, uds_local,
+				    ts2phc_recv_subscribed);
+		if (err) {
+			ts2phc_cleanup(&priv);
+			return -1;
+		}
+		err = auto_init_ports(&priv);
+		if (err) {
+			ts2phc_cleanup(&priv);
+			return -1;
+		}
+	}
 
 	STAILQ_FOREACH(iface, &cfg->interfaces, list) {
 		if (1 == config_get_int(cfg, interface_name(iface), "ts2phc.master")) {

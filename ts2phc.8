@@ -26,6 +26,21 @@ A single source may be used to distribute time to one or more PHC devices.
 
 .SH OPTIONS
 .TP
+.BI \-a
+Adjust the direction of synchronization automatically. The program determines
+which PHC should be a source of time and which should be a sink by querying the
+port states from the running instance of
+.B ptp4l.
+Note that using this option, the PPS signal distribution hierarchy still
+remains fixed as per the configuration file. This implies that using this
+option, a PHC PPS master may become a time sink, and a PPS slave may become a
+time source. Other, non-PHC types of PPS masters (generic, NMEA) cannot become
+time sinks. Clocks which are not part of
+.B ptp4l's
+list of ports are not synchronized. This option is useful when the
+.B boundary_clock_jbod
+option of ptp4l is also enabled.
+.TP
 .BI \-c " device|name"
 Specifies a PHC slave clock to be synchronized.
 The clock may be identified by its character device (like /dev/ptp0)
