@@ -15,8 +15,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "config.h"
 #include "clockadj.h"
+#include "config.h"
 #include "missing.h"
 #include "phc.h"
 #include "print.h"

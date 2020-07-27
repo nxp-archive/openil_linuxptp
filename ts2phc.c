@@ -265,7 +265,7 @@ int main(int argc, char *argv[])
 	} else {
 		pps_type = TS2PHC_MASTER_PHC;
 	}
-	priv.master = ts2phc_master_create(cfg, pps_source, pps_type);
+	priv.master = ts2phc_master_create(&priv, pps_source, pps_type);
 	if (!priv.master) {
 		fprintf(stderr, "failed to create master\n");
 		ts2phc_cleanup(&priv);

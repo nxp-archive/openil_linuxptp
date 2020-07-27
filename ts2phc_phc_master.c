@@ -12,15 +12,14 @@
 #include "phc.h"
 #include "print.h"
 #include "missing.h"
+#include "ts2phc.h"
 #include "ts2phc_master_private.h"
-#include "ts2phc_phc_master.h"
 #include "util.h"
 
 struct ts2phc_phc_master {
 	struct ts2phc_master master;
-	clockid_t clkid;
+	struct clock *clock;
 	int channel;
-	int fd;
 };
 
 static int ts2phc_phc_master_activate(struct config *cfg, const char *dev,
@@ -38,10 +37,10 @@ static int ts2phc_phc_master_activate(struct config *cfg, const char *dev,
 	desc.func = PTP_PF_PEROUT;
 	desc.chan = master->channel;
 
-	if (phc_pin_setfunc(master->clkid, &desc)) {
+	if (phc_pin_setfunc(master->clock->clkid, &desc)) {
 		pr_warning("Failed to set the pin. Continuing bravely on...");
 	}
-	if (clock_gettime(master->clkid, &ts)) {
+	if (clock_gettime(master->clock->clkid, &ts)) {
 		perror("clock_gettime");
 		return -1;
 	}
@@ -52,7 +51,8 @@ static int ts2phc_phc_master_activate(struct config *cfg, const char *dev,
 	perout_request.period.sec = 1;
 	perout_request.period.nsec = 0;
 
-	if (ioctl(master->fd, PTP_PEROUT_REQUEST2, &perout_request)) {
+	if (ioctl(CLOCKID_TO_FD(master->clock->clkid), PTP_PEROUT_REQUEST2,
+		  &perout_request)) {
 		pr_err(PTP_PEROUT_REQUEST_FAILED);
 		return -1;
 	}
@@ -67,10 +67,11 @@ static void ts2phc_phc_master_destroy(struct ts2phc_master *master)
 
 	memset(&perout_request, 0, sizeof(perout_request));
 	perout_request.index = m->channel;
-	if (ioctl(m->fd, PTP_PEROUT_REQUEST2, &perout_request)) {
+	if (ioctl(CLOCKID_TO_FD(m->clock->clkid), PTP_PEROUT_REQUEST2,
+		  &perout_request)) {
 		pr_err(PTP_PEROUT_REQUEST_FAILED);
 	}
-	posix_clock_close(m->clkid);
+	clock_destroy(m->clock);
 	free(m);
 }
 
@@ -79,14 +80,13 @@ static int ts2phc_phc_master_getppstime(struct ts2phc_master *m,
 {
 	struct ts2phc_phc_master *master =
 		container_of(m, struct ts2phc_phc_master, master);
-	return clock_gettime(master->clkid, ts);
+	return clock_gettime(master->clock->clkid, ts);
 }
 
-struct ts2phc_master *ts2phc_phc_master_create(struct config *cfg,
+struct ts2phc_master *ts2phc_phc_master_create(struct ts2phc_private *priv,
 					       const char *dev)
 {
 	struct ts2phc_phc_master *master;
-	int junk;
 
 	master = calloc(1, sizeof(*master));
 	if (!master) {
@@ -95,16 +95,17 @@ struct ts2phc_master *ts2phc_phc_master_create(struct config *cfg,
 	master->master.destroy = ts2phc_phc_master_destroy;
 	master->master.getppstime = ts2phc_phc_master_getppstime;
 
-	master->clkid = posix_clock_open(dev, &junk);
-	if (master->clkid == CLOCK_INVALID) {
+	master->clock = clock_add(priv, dev);
+	if (!master->clock) {
 		free(master);
 		return NULL;
 	}
-	master->fd = CLOCKID_TO_FD(master->clkid);
+	master->clock->is_destination = 0;
 
-	pr_debug("PHC master %s has ptp index %d", dev, junk);
+	pr_debug("PHC master %s has ptp index %d", dev,
+		 master->clock->phc_index);
 
-	if (ts2phc_phc_master_activate(cfg, dev, master)) {
+	if (ts2phc_phc_master_activate(priv->cfg, dev, master)) {
 		ts2phc_phc_master_destroy(&master->master);
 		return NULL;
 	}

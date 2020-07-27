@@ -198,7 +198,8 @@ static int ts2phc_nmea_master_getppstime(struct ts2phc_master *master,
 	return fix_valid ? lstab_error : -1;
 }
 
-struct ts2phc_master *ts2phc_nmea_master_create(struct config *cfg, const char *dev)
+struct ts2phc_master *ts2phc_nmea_master_create(struct ts2phc_private *priv,
+						const char *dev)
 {
 	struct ts2phc_nmea_master *master;
 	const char *leapfile = NULL;	// TODO - read from config.
@@ -214,7 +215,7 @@ struct ts2phc_master *ts2phc_nmea_master_create(struct config *cfg, const char *
 	}
 	master->master.destroy = ts2phc_nmea_master_destroy;
 	master->master.getppstime = ts2phc_nmea_master_getppstime;
-	master->config = cfg;
+	master->config = priv->cfg;
 	pthread_mutex_init(&master->mutex, NULL);
 	err = pthread_create(&master->worker, NULL, monitor_nmea_status, master);
 	if (err) {

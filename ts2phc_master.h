@@ -13,6 +13,7 @@ struct config;
 /**
  * Opaque type
  */
+struct ts2phc_private;
 struct ts2phc_master;
 
 /**
@@ -26,12 +27,13 @@ enum ts2phc_master_type {
 
 /**
  * Create a new instance of a PPS master clock.
- * @param cfg	Pointer to a valid configuration.
+ * @param priv	Pointer to the program's data structure.
  * @param dev   Name of the master clock or NULL.
  * @param type	The type of the clock to create.
  * @return	A pointer to a new PPS master clock on success, NULL otherwise.
  */
-struct ts2phc_master *ts2phc_master_create(struct config *cfg, const char *dev,
+struct ts2phc_master *ts2phc_master_create(struct ts2phc_private *priv,
+					   const char *dev,
 					   enum ts2phc_master_type type);
 
 /**
