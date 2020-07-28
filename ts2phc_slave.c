@@ -187,6 +187,7 @@ static struct ts2phc_slave *ts2phc_slave_create(struct ts2phc_private *priv,
 		pr_err("failed to open clock");
 		goto no_posix_clock;
 	}
+	slave->clock->is_destination = 1;
 
 	pr_debug("PHC slave %s has ptp index %d", device,
 		 slave->clock->phc_index);
