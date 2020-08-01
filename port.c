@@ -2597,6 +2597,8 @@ void port_dispatch(struct port *p, enum fsm_event event, int mdiff)
 
 static void bc_dispatch(struct port *p, enum fsm_event event, int mdiff)
 {
+	enum port_state switching_state;
+
 	if (clock_slave_only(p->clock)) {
 		if (event == EV_RS_MASTER || event == EV_RS_GRAND_MASTER) {
 			port_slave_priority_warning(p);
@@ -2613,7 +2615,12 @@ static void bc_dispatch(struct port *p, enum fsm_event event, int mdiff)
 		port_e2e_transition(p, p->state);
 	}
 
-	if (p->jbod && p->state == PS_UNCALIBRATED) {
+	if (port_is_ieee8021as(p))
+		switching_state = PS_SLAVE;
+	else
+		switching_state = PS_UNCALIBRATED;
+
+	if (p->jbod && p->state == switching_state) {
 		if (clock_switch_phc(p->clock, p->phc_index)) {
 			p->last_fault_type = FT_SWITCH_PHC;
 			port_dispatch(p, EV_FAULT_DETECTED, 0);
