@@ -24,29 +24,21 @@
 #include "ts2phc.h"
 #include "util.h"
 
-#define NS_PER_SEC		1000000000LL
-#define SAMPLE_WEIGHT		1.0
-
 struct ts2phc_slave {
 	char *name;
 	STAILQ_ENTRY(ts2phc_slave) list;
 	struct ptp_pin_desc pin_desc;
 	unsigned int polarity;
-	int32_t correction;
+	tmv_t correction;
 	uint32_t ignore_lower;
 	uint32_t ignore_upper;
 	struct clock *clock;
-	int no_adj;
 };
 
 struct ts2phc_slave_array {
 	struct ts2phc_slave **slave;
+	int *collected_events;
 	struct pollfd *pfd;
-};
-
-struct ts2phc_source_timestamp {
-	struct timespec ts;
-	bool valid;
 };
 
 enum extts_result {
@@ -54,11 +46,6 @@ enum extts_result {
 	EXTTS_OK	= 0,
 	EXTTS_IGNORE	= 1,
 };
-
-static enum extts_result ts2phc_slave_offset(struct ts2phc_slave *slave,
-					     struct ts2phc_source_timestamp ts,
-					     int64_t *offset,
-					     uint64_t *local_ts);
 
 static int ts2phc_slave_array_create(struct ts2phc_private *priv)
 {
@@ -86,6 +73,15 @@ static int ts2phc_slave_array_create(struct ts2phc_private *priv)
 		polling_array->slave = NULL;
 		return -1;
 	}
+	polling_array->collected_events = malloc(priv->n_slaves * sizeof(int));
+	if (!polling_array->collected_events) {
+		pr_err("low memory");
+		free(polling_array->slave);
+		free(polling_array->pfd);
+		polling_array->pfd = NULL;
+		polling_array->slave = NULL;
+		return -1;
+	}
 	i = 0;
 	STAILQ_FOREACH(slave, &priv->slaves, list) {
 		polling_array->slave[i] = slave;
@@ -107,8 +103,12 @@ static void ts2phc_slave_array_destroy(struct ts2phc_private *priv)
 {
 	struct ts2phc_slave_array *polling_array = priv->polling_array;
 
+	if (!polling_array)
+		return;
+
 	free(polling_array->slave);
 	free(polling_array->pfd);
+	free(polling_array->collected_events);
 	free(polling_array);
 	priv->polling_array = NULL;
 }
@@ -152,6 +152,7 @@ static struct ts2phc_slave *ts2phc_slave_create(struct ts2phc_private *priv,
 	struct ptp_extts_request extts;
 	struct ts2phc_slave *slave;
 	int err, pulsewidth;
+	int32_t correction;
 
 	slave = calloc(1, sizeof(*slave));
 	if (!slave) {
@@ -171,8 +172,9 @@ static struct ts2phc_slave *ts2phc_slave_create(struct ts2phc_private *priv,
 					      "ts2phc.channel");
 	slave->polarity = config_get_int(priv->cfg, device,
 					 "ts2phc.extts_polarity");
-	slave->correction = config_get_int(priv->cfg, device,
-					   "ts2phc.extts_correction");
+	correction = config_get_int(priv->cfg, device,
+				    "ts2phc.extts_correction");
+	slave->correction = nanoseconds_to_tmv(correction);
 
 	pulsewidth = config_get_int(priv->cfg, device,
 				    "ts2phc.pulsewidth");
@@ -238,71 +240,32 @@ static void ts2phc_slave_destroy(struct ts2phc_slave *slave)
 	free(slave);
 }
 
-static int ts2phc_slave_event(struct ts2phc_slave *slave,
-			      struct ts2phc_source_timestamp source_ts)
+static enum extts_result ts2phc_slave_event(struct ts2phc_private *priv,
+					    struct ts2phc_slave *slave)
 {
-	enum extts_result result;
-	uint64_t extts_ts;
-	int64_t offset;
-	double adj;
-
-	result = ts2phc_slave_offset(slave, source_ts, &offset, &extts_ts);
-	switch (result) {
-	case EXTTS_ERROR:
-		return -1;
-	case EXTTS_OK:
-		break;
-	case EXTTS_IGNORE:
-		return 0;
-	}
-
-	if (slave->no_adj) {
-		pr_info("%s master offset %10" PRId64, slave->name, offset);
-		return 0;
-	}
-
-	adj = servo_sample(slave->clock->servo, offset, extts_ts,
-			   SAMPLE_WEIGHT, &slave->clock->servo_state);
-
-	pr_info("%s master offset %10" PRId64 " s%d freq %+7.0f",
-		slave->name, offset, slave->clock->servo_state, adj);
-
-	switch (slave->clock->servo_state) {
-	case SERVO_UNLOCKED:
-		break;
-	case SERVO_JUMP:
-		clockadj_set_freq(slave->clock->clkid, -adj);
-		clockadj_step(slave->clock->clkid, -offset);
-		break;
-	case SERVO_LOCKED:
-	case SERVO_LOCKED_STABLE:
-		clockadj_set_freq(slave->clock->clkid, -adj);
-		break;
-	}
-	return 0;
-}
-
-static enum extts_result ts2phc_slave_offset(struct ts2phc_slave *slave,
-					     struct ts2phc_source_timestamp src,
-					     int64_t *offset,
-					     uint64_t *local_ts)
-{
-	struct timespec source_ts = src.ts;
+	enum extts_result result = EXTTS_OK;
 	struct ptp_extts_event event;
-	uint64_t event_ns, source_ns;
-	int cnt;
+	struct timespec source_ts;
+	int err, cnt;
+	tmv_t ts;
 
 	cnt = read(CLOCKID_TO_FD(slave->clock->clkid), &event, sizeof(event));
 	if (cnt != sizeof(event)) {
 		pr_err("read extts event failed: %m");
-		return EXTTS_ERROR;
+		result = EXTTS_ERROR;
+		goto out;
 	}
 	if (event.index != slave->pin_desc.chan) {
 		pr_err("extts on unexpected channel");
-		return EXTTS_ERROR;
+		result = EXTTS_ERROR;
+		goto out;
 	}
-	event_ns = event.t.sec * NS_PER_SEC;
-	event_ns += event.t.nsec;
+
+	err = ts2phc_master_getppstime(priv->master, &source_ts);
+	if (err < 0) {
+		pr_debug("source ts not valid");
+		return 0;
+	}
 
 	if (slave->polarity == (PTP_RISING_EDGE | PTP_FALLING_EDGE) &&
 	    source_ts.tv_nsec > slave->ignore_lower &&
@@ -312,20 +275,17 @@ static enum extts_result ts2phc_slave_offset(struct ts2phc_slave *slave,
 		 slave->name, event.index, event.t.sec, event.t.nsec,
 		 (int64_t) source_ts.tv_sec, source_ts.tv_nsec);
 
-		return EXTTS_IGNORE;
+		result = EXTTS_IGNORE;
+		goto out;
 	}
-	if (source_ts.tv_nsec > 500000000) {
-		source_ts.tv_sec++;
-	}
-	source_ns = source_ts.tv_sec * NS_PER_SEC;
-	*offset = event_ns + slave->correction - source_ns;
-	*local_ts = event_ns + slave->correction;
 
-	pr_debug("%s extts index %u at %lld.%09u corr %d src %" PRIi64
-		 ".%ld diff %" PRId64,
-		 slave->name, event.index, event.t.sec, event.t.nsec,
-		 slave->correction,
-		 (int64_t) source_ts.tv_sec, source_ts.tv_nsec, *offset);
+out:
+	if (result == EXTTS_ERROR || result == EXTTS_IGNORE)
+		return result;
+
+	ts = pct_to_tmv(event.t);
+	ts = tmv_add(ts, slave->correction);
+	clock_add_tstamp(slave->clock, ts);
 
 	return EXTTS_OK;
 }
@@ -401,35 +361,64 @@ void ts2phc_slave_cleanup(struct ts2phc_private *priv)
 int ts2phc_slave_poll(struct ts2phc_private *priv)
 {
 	struct ts2phc_slave_array *polling_array = priv->polling_array;
-	struct ts2phc_source_timestamp source_ts;
+	int all_slaves_have_events = 0;
+	int ignore_any = 0;
 	unsigned int i;
-	int cnt, err;
+	int cnt;
 
-	cnt = poll(polling_array->pfd, priv->n_slaves, 2000);
-	if (cnt < 0) {
-		if (EINTR == errno) {
+	for (i = 0; i < priv->n_slaves; i++)
+		polling_array->collected_events[i] = 0;
+
+	while (!all_slaves_have_events) {
+		struct ts2phc_slave *slave;
+
+		cnt = poll(polling_array->pfd, priv->n_slaves, 2000);
+		if (cnt < 0) {
+			if (EINTR == errno) {
+				return 0;
+			} else {
+				pr_emerg("poll failed");
+				return -1;
+			}
+		} else if (!cnt) {
+			pr_debug("poll returns zero, no events");
 			return 0;
-		} else {
-			pr_emerg("poll failed");
-			return -1;
 		}
-	} else if (!cnt) {
-		pr_debug("poll returns zero, no events");
-		return 0;
-	}
 
-	err = ts2phc_master_getppstime(priv->master, &source_ts.ts);
-	source_ts.valid = err ? false : true;
+		for (i = 0; i < priv->n_slaves; i++) {
+			if (polling_array->pfd[i].revents & (POLLIN|POLLPRI)) {
+				enum extts_result result;
 
-	if (!source_ts.valid) {
-		pr_debug("ignoring invalid master time stamp");
-		return 0;
-	}
+				slave = polling_array->slave[i];
 
-	for (i = 0; i < priv->n_slaves; i++) {
-		if (polling_array->pfd[i].revents & (POLLIN|POLLPRI)) {
-			ts2phc_slave_event(polling_array->slave[i], source_ts);
+				result = ts2phc_slave_event(priv, slave);
+				if (result == EXTTS_ERROR)
+					return -EIO;
+				if (result == EXTTS_IGNORE)
+					ignore_any = 1;
+
+				/*
+				 * Collect the events anyway, even if we'll
+				 * ignore this master edge anyway. We don't
+				 * want slave events from different edges
+				 * to pile up and mix.
+				 */
+				polling_array->collected_events[i]++;
+			}
+		}
+
+		all_slaves_have_events = true;
+
+		for (i = 0; i < priv->n_slaves; i++) {
+			if (!polling_array->collected_events[i]) {
+				all_slaves_have_events = false;
+				break;
+			}
 		}
 	}
-	return 0;
+
+	if (ignore_any)
+		return 0;
+
+	return 1;
 }
