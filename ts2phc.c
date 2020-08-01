@@ -477,6 +477,42 @@ static void ts2phc_synchronize_clocks(struct ts2phc_private *priv, int autocfg)
 	}
 }
 
+static int ts2phc_collect_master_tstamp(struct ts2phc_private *priv)
+{
+	struct clock *master_clock;
+	struct timespec master_ts;
+	int err;
+
+	master_clock = ts2phc_master_get_clock(priv->master);
+	/*
+	 * Master isn't a PHC (it may be a generic or a GPS master),
+	 * don't error out, just don't do anything. If it doesn't have a PHC,
+	 * there is nothing to synchronize, which is the only point of
+	 * collecting its perout timestamp in the first place.
+	 */
+	if (!master_clock)
+		return 0;
+
+	err = ts2phc_master_getppstime(priv->master, &master_ts);
+	if (err < 0) {
+		pr_err("source ts not valid");
+		return err;
+	}
+
+	/*
+	 * As long as the kernel doesn't support a proper API for reporting
+	 * a precise perout timestamp, we'll have to use this crude
+	 * approximation.
+	 */
+	if (master_ts.tv_nsec > NS_PER_SEC / 2)
+		master_ts.tv_sec++;
+	master_ts.tv_nsec = 0;
+
+	clock_add_tstamp(master_clock, timespec_to_tmv(master_ts));
+
+	return 0;
+}
+
 static void usage(char *progname)
 {
 	fprintf(stderr,
@@ -695,8 +731,15 @@ int main(int argc, char *argv[])
 			pr_err("poll failed");
 			break;
 		}
-		if (err > 0)
+		if (err > 0) {
+			err = ts2phc_collect_master_tstamp(&priv);
+			if (err) {
+				pr_err("failed to collect master tstamp");
+				break;
+			}
+
 			ts2phc_synchronize_clocks(&priv, autocfg);
+		}
 	}
 
 	ts2phc_cleanup(&priv);

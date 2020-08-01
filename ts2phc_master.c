@@ -38,3 +38,11 @@ int ts2phc_master_getppstime(struct ts2phc_master *master, struct timespec *ts)
 {
 	return master->getppstime(master, ts);
 }
+
+struct clock *ts2phc_master_get_clock(struct ts2phc_master *m)
+{
+	if (m->get_clock)
+		return m->get_clock(m);
+
+	return NULL;
+}

@@ -15,6 +15,7 @@
 struct ts2phc_master {
 	void (*destroy)(struct ts2phc_master *ts2phc_master);
 	int (*getppstime)(struct ts2phc_master *master, struct timespec *ts);
+	struct clock *(*get_clock)(struct ts2phc_master *m);
 };
 
 #endif

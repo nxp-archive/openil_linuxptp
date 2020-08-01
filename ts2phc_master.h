@@ -51,4 +51,6 @@ void ts2phc_master_destroy(struct ts2phc_master *master);
  */
 int ts2phc_master_getppstime(struct ts2phc_master *master, struct timespec *ts);
 
+struct clock *ts2phc_master_get_clock(struct ts2phc_master *m);
+
 #endif
